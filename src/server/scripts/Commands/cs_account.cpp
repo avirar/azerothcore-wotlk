@@ -365,7 +365,7 @@ public:
         return true;
     }
 
-    static bool HandleAccountOnlineListCommand(ChatHandler* handler, char const* /*args*/)
+static bool HandleAccountOnlineListCommand(ChatHandler* handler, char const* /*args*/)
 {
     /// Get the session map to iterate through currently online players
     SessionMap const& sessions = sWorld->GetAllSessions();
@@ -398,12 +398,18 @@ public:
 
         // Retrieve account name from LoginDatabase using the account ID
         LoginDatabasePreparedStatement* loginStmt = LoginDatabase.GetPreparedStatement(LOGIN_GET_USERNAME_BY_ID);
+        if (!loginStmt)
+        {
+            handler->PSendSysMessage("Error: Failed to prepare statement.");
+            continue;
+        }
+
         loginStmt->SetData(0, accountId);
         PreparedQueryResult result = LoginDatabase.Query(loginStmt);
 
-        if (!result)
+        if (!result || !result->GetRowCount())
         {
-            handler->PSendSysMessage(LANG_ACCOUNT_LIST_ERROR, playerName.c_str());
+            handler->PSendSysMessage("Error: Could not retrieve account data.");
             continue;
         }
 
@@ -424,6 +430,7 @@ public:
     handler->SendSysMessage(LANG_ACCOUNT_LIST_BAR);
     return true;
 }
+
 
     static bool HandleAccountRemoveLockCountryCommand(ChatHandler* handler, char const* args)
     {
