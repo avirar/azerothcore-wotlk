@@ -365,53 +365,65 @@ public:
         return true;
     }
 
-    /// Display info on users currently in the realm
     static bool HandleAccountOnlineListCommand(ChatHandler* handler, char const* /*args*/)
-    {
-        ///- Get the list of accounts ID logged to the realm
-        CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHARACTER_ONLINE);
+{
+    /// Get the session map to iterate through currently online players
+    SessionMap const& sessions = sWorld->GetAllSessions();
 
-        PreparedQueryResult result = CharacterDatabase.Query(stmt);
+    if (sessions.empty())
+    {
+        handler->SendSysMessage(LANG_ACCOUNT_LIST_EMPTY);
+        return true;
+    }
+
+    /// Display the list of account/characters online
+    handler->SendSysMessage(LANG_ACCOUNT_LIST_BAR_HEADER);
+    handler->SendSysMessage(LANG_ACCOUNT_LIST_HEADER);
+    handler->SendSysMessage(LANG_ACCOUNT_LIST_BAR);
+
+    /// Iterate through all active sessions to retrieve online player info
+    for (auto const& sessionPair : sessions)
+    {
+        WorldSession* session = sessionPair.second;
+        if (!session)
+            continue;
+
+        Player* player = session->GetPlayer();
+        if (!player)
+            continue;
+
+        // Get account ID and character name
+        std::string playerName = player->GetName();
+        uint32 accountId = session->GetAccountId();
+
+        // Retrieve account name from LoginDatabase using the account ID
+        LoginDatabasePreparedStatement* loginStmt = LoginDatabase.GetPreparedStatement(LOGIN_GET_USERNAME_BY_ID);
+        loginStmt->SetData(0, accountId);
+        PreparedQueryResult result = LoginDatabase.Query(loginStmt);
 
         if (!result)
         {
-            handler->SendSysMessage(LANG_ACCOUNT_LIST_EMPTY);
-            return true;
+            handler->PSendSysMessage(LANG_ACCOUNT_LIST_ERROR, playerName.c_str());
+            continue;
         }
 
-        ///- Display the list of account/characters online
-        handler->SendSysMessage(LANG_ACCOUNT_LIST_BAR_HEADER);
-        handler->SendSysMessage(LANG_ACCOUNT_LIST_HEADER);
-        handler->SendSysMessage(LANG_ACCOUNT_LIST_BAR);
+        Field* fields = result->Fetch();
+        std::string accountName = fields[0].Get<std::string>();
 
-        ///- Cycle through accounts
-        do
-        {
-            Field* fieldsDB = result->Fetch();
-            std::string name = fieldsDB[0].Get<std::string>();
-            uint32 account = fieldsDB[1].Get<uint32>();
+        // Skip bot accounts that start with RNDBOT prefix
+        if (accountName.rfind("RNDBOT", 0) == 0)
+            continue;
 
-            ///- Get the username, last IP and GM level of each account
-            // No SQL injection. account is uint32.
-            LoginDatabasePreparedStatement* loginStmt = LoginDatabase.GetPreparedStatement(LOGIN_SEL_ACCOUNT_INFO);
-            loginStmt->SetData(0, account);
-            PreparedQueryResult resultLogin = LoginDatabase.Query(loginStmt);
-
-            if (resultLogin)
-            {
-                Field* fieldsLogin = resultLogin->Fetch();
-                handler->PSendSysMessage(LANG_ACCOUNT_LIST_LINE,
-                                         fieldsLogin[0].Get<std::string>(), name, fieldsLogin[1].Get<std::string>(),
-                                         fieldsDB[2].Get<uint16>(), fieldsDB[3].Get<uint16>(), fieldsLogin[3].Get<uint8>(),
-                                         fieldsLogin[2].Get<uint8>());
-            }
-            else
-                handler->PSendSysMessage(LANG_ACCOUNT_LIST_ERROR, name);
-        } while (result->NextRow());
-
-        handler->SendSysMessage(LANG_ACCOUNT_LIST_BAR);
-        return true;
+        // Send the character and account info to the handler
+        handler->PSendSysMessage(LANG_ACCOUNT_LIST_LINE,
+                                 accountName.c_str(), playerName.c_str(),
+                                 player->GetMapId(), player->GetZoneId(),
+                                 player->GetLevel());
     }
+
+    handler->SendSysMessage(LANG_ACCOUNT_LIST_BAR);
+    return true;
+}
 
     static bool HandleAccountRemoveLockCountryCommand(ChatHandler* handler, char const* args)
     {
