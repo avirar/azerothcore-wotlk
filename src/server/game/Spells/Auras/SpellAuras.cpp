@@ -598,7 +598,7 @@ void Aura::UpdateTargetMap(Unit* caster, bool apply)
 
     FillTargetMap(targets, caster);
 
-    UnitList targetsToRemove;
+    std::list<ObjectGuid> targetsToRemove;
 
     // mark all auras as ready to remove
     for (ApplicationMap::iterator appIter = m_applications.begin(); appIter != m_applications.end(); ++appIter)
@@ -606,7 +606,7 @@ void Aura::UpdateTargetMap(Unit* caster, bool apply)
         std::map<Unit*, uint8>::iterator existing = targets.find(appIter->second->GetTarget());
         // not found in current area - remove the aura
         if (existing == targets.end())
-            targetsToRemove.push_back(appIter->second->GetTarget());
+            targetsToRemove.push_back(appIter->second->GetTarget()->GetGUID());
         else
         {
             // xinef: check immunities here, so aura wont get removed on every tick and then reapplied
@@ -620,7 +620,7 @@ void Aura::UpdateTargetMap(Unit* caster, bool apply)
             // needs readding - remove now, will be applied in next update cycle
             // (dbcs do not have auras which apply on same type of targets but have different radius, so this is not really needed)
             if (appIter->second->GetEffectMask() != existing->second || !CanBeAppliedOn(existing->first))
-                targetsToRemove.push_back(appIter->second->GetTarget());
+                targetsToRemove.push_back(appIter->second->GetTarget()->GetGUID());
             // nothing todo - aura already applied
             // remove from auras to register list
             targets.erase(existing);
@@ -712,9 +712,10 @@ void Aura::UpdateTargetMap(Unit* caster, bool apply)
     }
 
     // remove auras from units no longer needing them
-    for (UnitList::iterator itr = targetsToRemove.begin(); itr != targetsToRemove.end(); ++itr)
-        if (AuraApplication* aurApp = GetApplicationOfTarget((*itr)->GetGUID()))
-            (*itr)->_UnapplyAura(aurApp, AURA_REMOVE_BY_DEFAULT);
+    for (std::list<ObjectGuid>::iterator itr = targetsToRemove.begin(); itr != targetsToRemove.end(); ++itr)
+        if (AuraApplication* aurApp = GetApplicationOfTarget(*itr))
+            if (Unit* target = ObjectAccessor::GetUnit(*GetOwner(), *itr))
+                target->_UnapplyAura(aurApp, AURA_REMOVE_BY_DEFAULT);
 
     if (!apply)
         return;

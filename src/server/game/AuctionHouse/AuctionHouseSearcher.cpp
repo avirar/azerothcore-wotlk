@@ -24,16 +24,25 @@
 
 AuctionHouseWorkerThread::AuctionHouseWorkerThread(ProducerConsumerQueue<AuctionSearcherRequest*>* requestQueue, MPSCQueue<AuctionSearcherResponse>* responseQueue)
 {
-    _workerThread = std::thread(&AuctionHouseWorkerThread::Run, this);
     _requestQueue = requestQueue;
     _responseQueue = responseQueue;
     _stopped = false;
+    // Thread will be started explicitly via Start() method
+}
+
+void AuctionHouseWorkerThread::Start()
+{
+    if (!_workerThread.joinable()) {
+        _workerThread = std::thread(&AuctionHouseWorkerThread::Run, this);
+    }
 }
 
 void AuctionHouseWorkerThread::Stop()
 {
     _stopped = true;
-    _workerThread.join();
+    if (_workerThread.joinable()) {
+        _workerThread.join();
+    }
 }
 
 void AuctionHouseWorkerThread::AddAuctionSearchUpdateToQueue(std::shared_ptr<AuctionSearcherUpdate> const auctionSearchUpdate)
@@ -336,8 +345,13 @@ void AuctionHouseWorkerThread::BuildListAuctionItems(AuctionSearchListRequest co
 
 AuctionHouseSearcher::AuctionHouseSearcher()
 {
+    // First, create all worker threads (but don't start them yet)
     for (uint32 i = 0; i < sWorld->getIntConfig(CONFIG_AUCTIONHOUSE_WORKERTHREADS); ++i)
         _workerThreads.push_back(std::make_unique<AuctionHouseWorkerThread>(&_requestQueue, &_responseQueue));
+
+    // Now that all objects are fully constructed, start all worker threads
+    for (std::unique_ptr<AuctionHouseWorkerThread> const& workerThread : _workerThreads)
+        workerThread->Start();
 }
 
 AuctionHouseSearcher::~AuctionHouseSearcher()

@@ -245,6 +245,7 @@ class AuctionHouseWorkerThread
 public:
     AuctionHouseWorkerThread(ProducerConsumerQueue<AuctionSearcherRequest*>* requestQueue, MPSCQueue<AuctionSearcherResponse>* responseQueue);
 
+    void Start();
     void Stop();
 
     void AddAuctionSearchUpdateToQueue(std::shared_ptr<AuctionSearcherUpdate> const auctionSearchUpdate);

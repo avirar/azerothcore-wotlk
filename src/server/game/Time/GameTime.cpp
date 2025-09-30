@@ -17,6 +17,7 @@
 
 #include "GameTime.h"
 #include "Timer.h"
+#include <atomic>
 
 namespace GameTime
 {
@@ -24,11 +25,12 @@ namespace GameTime
 
     Seconds const StartTime = GetEpochTime();
 
-    Seconds GameTime = GetEpochTime();
-    Milliseconds GameMSTime = 0ms;
+    // Atomic variables to prevent race conditions during concurrent access
+    std::atomic<Seconds::rep> GameTimeAtomic{GetEpochTime().count()};
+    std::atomic<Milliseconds::rep> GameMSTimeAtomic{0};
 
-    SystemTimePoint GameTimeSystemPoint = SystemTimePoint::min();
-    TimePoint GameTimeSteadyPoint = TimePoint::min();
+    std::atomic<SystemTimePoint::rep> GameTimeSystemPointAtomic{SystemTimePoint::min().time_since_epoch().count()};
+    std::atomic<TimePoint::rep> GameTimeSteadyPointAtomic{TimePoint::min().time_since_epoch().count()};
 
     Seconds GetStartTime()
     {
@@ -37,34 +39,38 @@ namespace GameTime
 
     Seconds GetGameTime()
     {
-        return GameTime;
+        return Seconds{GameTimeAtomic.load(std::memory_order_relaxed)};
     }
 
     Milliseconds GetGameTimeMS()
     {
-        return GameMSTime;
+        return Milliseconds{GameMSTimeAtomic.load(std::memory_order_relaxed)};
     }
 
     SystemTimePoint GetSystemTime()
     {
-        return GameTimeSystemPoint;
+        auto count = GameTimeSystemPointAtomic.load(std::memory_order_relaxed);
+        return SystemTimePoint{SystemTimePoint::duration{count}};
     }
 
     TimePoint Now()
     {
-        return GameTimeSteadyPoint;
+        auto count = GameTimeSteadyPointAtomic.load(std::memory_order_relaxed);
+        return TimePoint{TimePoint::duration{count}};
     }
 
     Seconds GetUptime()
     {
-        return GameTime - StartTime;
+        return GetGameTime() - StartTime;
     }
 
     void UpdateGameTimers()
     {
-        GameTime = GetEpochTime();
-        GameMSTime = GetTimeMS();
-        GameTimeSystemPoint = system_clock::now();
-        GameTimeSteadyPoint = steady_clock::now();
+        // Use relaxed memory ordering since we don't need strict ordering between these updates
+        // and the performance benefit is significant for time-critical operations
+        GameTimeAtomic.store(GetEpochTime().count(), std::memory_order_relaxed);
+        GameMSTimeAtomic.store(GetTimeMS().count(), std::memory_order_relaxed);
+        GameTimeSystemPointAtomic.store(system_clock::now().time_since_epoch().count(), std::memory_order_relaxed);
+        GameTimeSteadyPointAtomic.store(steady_clock::now().time_since_epoch().count(), std::memory_order_relaxed);
     }
 }

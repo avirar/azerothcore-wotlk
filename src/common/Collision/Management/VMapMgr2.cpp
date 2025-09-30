@@ -40,6 +40,7 @@ namespace VMAP
 
     VMapMgr2::~VMapMgr2()
     {
+        std::unique_lock<std::shared_mutex> writeLock(InstanceMapTreesLock);
         for (InstanceTreeMap::iterator i = iInstanceMapTrees.begin(); i != iInstanceMapTrees.end(); ++i)
         {
             delete i->second;
@@ -53,6 +54,7 @@ namespace VMAP
 
     void VMapMgr2::InitializeThreadUnsafe(const std::vector<uint32>& mapIds)
     {
+        std::unique_lock<std::shared_mutex> writeLock(InstanceMapTreesLock);
         // the caller must pass the list of all mapIds that will be used in the VMapMgr2 lifetime
         for (const uint32& mapId : mapIds)
         {
@@ -75,6 +77,7 @@ namespace VMAP
 
     InstanceTreeMap::const_iterator VMapMgr2::GetMapTree(uint32 mapId) const
     {
+        std::shared_lock<std::shared_mutex> readLock(InstanceMapTreesLock);
         // return the iterator if found or end() if not found/NULL
         InstanceTreeMap::const_iterator itr = iInstanceMapTrees.find(mapId);
         if (itr != iInstanceMapTrees.cend() && !itr->second)
@@ -116,6 +119,7 @@ namespace VMAP
     // load one tile (internal use only)
     bool VMapMgr2::_loadMap(uint32 mapId, const std::string& basePath, uint32 tileX, uint32 tileY)
     {
+        std::unique_lock<std::shared_mutex> writeLock(InstanceMapTreesLock);
         InstanceTreeMap::iterator instanceTree = iInstanceMapTrees.find(mapId);
         if (instanceTree == iInstanceMapTrees.end())
         {
@@ -145,6 +149,7 @@ namespace VMAP
 
     void VMapMgr2::unloadMap(unsigned int mapId)
     {
+        std::unique_lock<std::shared_mutex> writeLock(InstanceMapTreesLock);
         InstanceTreeMap::iterator instanceTree = iInstanceMapTrees.find(mapId);
         if (instanceTree != iInstanceMapTrees.end() && instanceTree->second)
         {
@@ -159,6 +164,7 @@ namespace VMAP
 
     void VMapMgr2::unloadMap(unsigned int mapId, int x, int y)
     {
+        std::unique_lock<std::shared_mutex> writeLock(InstanceMapTreesLock);
         InstanceTreeMap::iterator instanceTree = iInstanceMapTrees.find(mapId);
         if (instanceTree != iInstanceMapTrees.end() && instanceTree->second)
         {

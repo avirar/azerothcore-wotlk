@@ -20,6 +20,7 @@
 
 #include "IVMapMgr.h"
 #include <mutex>
+#include <shared_mutex>
 #include <unordered_map>
 #include <vector>
 
@@ -82,6 +83,9 @@ namespace VMAP
 
         // Mutex for iLoadedModelFiles
         std::mutex LoadedModelFilesLock;
+
+        // Reader-writer mutex for iInstanceMapTrees to prevent race conditions
+        mutable std::shared_mutex InstanceMapTreesLock;
 
         bool _loadMap(uint32 mapId, const std::string& basePath, uint32 tileX, uint32 tileY);
         /* void _unloadMap(uint32 pMapId, uint32 x, uint32 y); */

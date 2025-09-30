@@ -24,6 +24,8 @@
 #include "DetourNavMesh.h"
 #include <unordered_map>
 #include <vector>
+#include <shared_mutex>
+#include <atomic>
 
 //  memory management
 inline void* dtCustomAlloc(std::size_t size, dtAllocHint /*hint*/)
@@ -95,8 +97,11 @@ namespace MMAP
         [[nodiscard]] MMapDataSet::const_iterator GetMMapData(uint32 mapId) const;
 
         MMapDataSet loadedMMaps;
-        uint32 loadedTiles{0};
+        std::atomic<uint32> loadedTiles{0};
         bool thread_safe_environment{true};
+
+        // Thread synchronization for map and tile loading
+        mutable std::shared_mutex _loadMapMutex;
     };
 }
 

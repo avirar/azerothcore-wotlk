@@ -116,31 +116,37 @@ DynamicMapTree::~DynamicMapTree()
 
 void DynamicMapTree::insert(const GameObjectModel& mdl)
 {
+    std::unique_lock<std::shared_mutex> writeLock(_treeMutex);
     impl->insert(mdl);
 }
 
 void DynamicMapTree::remove(const GameObjectModel& mdl)
 {
+    std::unique_lock<std::shared_mutex> writeLock(_treeMutex);
     impl->remove(mdl);
 }
 
 bool DynamicMapTree::contains(const GameObjectModel& mdl) const
 {
+    std::shared_lock<std::shared_mutex> readLock(_treeMutex);
     return impl->contains(mdl);
 }
 
 void DynamicMapTree::balance()
 {
+    std::unique_lock<std::shared_mutex> writeLock(_treeMutex);
     impl->balance();
 }
 
 int DynamicMapTree::size() const
 {
+    std::shared_lock<std::shared_mutex> readLock(_treeMutex);
     return impl->size();
 }
 
 void DynamicMapTree::update(uint32 t_diff)
 {
+    std::unique_lock<std::shared_mutex> writeLock(_treeMutex);
     impl->update(t_diff);
 }
 
@@ -217,6 +223,7 @@ private:
 
 bool DynamicMapTree::GetIntersectionTime(const uint32 phasemask, const G3D::Ray& ray, const G3D::Vector3& endPos, float& maxDist) const
 {
+    std::shared_lock<std::shared_mutex> readLock(_treeMutex);
     float distance = maxDist;
     DynamicTreeIntersectionCallback callback(phasemask, VMAP::ModelIgnoreFlags::Nothing);
     impl->intersectRay(ray, callback, distance, endPos, false);
@@ -231,6 +238,7 @@ bool DynamicMapTree::GetObjectHitPos(const uint32 phasemask, const G3D::Vector3&
                                      const G3D::Vector3& endPos, G3D::Vector3& resultHit,
                                      float modifyDist) const
 {
+    std::shared_lock<std::shared_mutex> readLock(_treeMutex);
     bool result = false;
     float maxDist = (endPos - startPos).magnitude();
     // valid map coords should *never ever* produce float overflow, but this would produce NaNs too
@@ -275,6 +283,7 @@ bool DynamicMapTree::GetObjectHitPos(const uint32 phasemask, const G3D::Vector3&
 
 bool DynamicMapTree::isInLineOfSight(float x1, float y1, float z1, float x2, float y2, float z2, uint32 phasemask, VMAP::ModelIgnoreFlags ignoreFlags) const
 {
+    std::shared_lock<std::shared_mutex> readLock(_treeMutex);
     G3D::Vector3 v1(x1, y1, z1), v2(x2, y2, z2);
 
     float maxDist = (v2 - v1).magnitude();
@@ -293,6 +302,7 @@ bool DynamicMapTree::isInLineOfSight(float x1, float y1, float z1, float x2, flo
 
 float DynamicMapTree::getHeight(float x, float y, float z, float maxSearchDist, uint32 phasemask) const
 {
+    std::shared_lock<std::shared_mutex> readLock(_treeMutex);
     G3D::Vector3 v(x, y, z);
     G3D::Ray r(v, G3D::Vector3(0, 0, -1));
     DynamicTreeIntersectionCallback callback(phasemask, VMAP::ModelIgnoreFlags::Nothing);
@@ -310,6 +320,7 @@ float DynamicMapTree::getHeight(float x, float y, float z, float maxSearchDist, 
 
 bool DynamicMapTree::GetAreaInfo(float x, float y, float& z, uint32 phasemask, uint32& flags, int32& adtId, int32& rootId, int32& groupId) const
 {
+    std::shared_lock<std::shared_mutex> readLock(_treeMutex);
     G3D::Vector3 v(x, y, z + 0.5f);
     DynamicTreeAreaInfoCallback intersectionCallBack(phasemask);
     impl->intersectPoint(v, intersectionCallBack);
@@ -327,6 +338,7 @@ bool DynamicMapTree::GetAreaInfo(float x, float y, float& z, uint32 phasemask, u
 
 void DynamicMapTree::GetAreaAndLiquidData(float x, float y, float z, uint32 phasemask, uint8 reqLiquidType, VMAP::AreaAndLiquidData& data) const
 {
+    std::shared_lock<std::shared_mutex> readLock(_treeMutex);
     G3D::Vector3 v(x, y, z + 0.5f);
     DynamicTreeLocationInfoCallback intersectionCallBack(phasemask);
     impl->intersectPoint(v, intersectionCallBack);

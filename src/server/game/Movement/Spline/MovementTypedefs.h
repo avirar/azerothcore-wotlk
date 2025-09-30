@@ -19,6 +19,7 @@
 #define AC_TYPEDEFS_H
 
 #include "Common.h"
+#include <atomic>
 
 namespace G3D
 {
@@ -50,22 +51,30 @@ namespace Movement
     class counter
     {
     public:
-        counter() { init(); }
+        counter() { m_counter.store(0, std::memory_order_relaxed); }
 
         void Increase()
         {
-            if (m_counter == limit)
-                init();
-            else
-                ++m_counter;
+            T current = m_counter.load(std::memory_order_relaxed);
+            T next;
+            do {
+                next = (current == limit) ? 0 : current + 1;
+            } while (!m_counter.compare_exchange_weak(current, next, std::memory_order_relaxed));
         }
 
-        T NewId() { Increase(); return m_counter; }
-        T getCurrent() const { return m_counter; }
+        T NewId() {
+            T current = m_counter.load(std::memory_order_relaxed);
+            T next;
+            do {
+                next = (current == limit) ? 0 : current + 1;
+            } while (!m_counter.compare_exchange_weak(current, next, std::memory_order_relaxed));
+            return next;
+        }
+
+        T getCurrent() const { return m_counter.load(std::memory_order_relaxed); }
 
     private:
-        void init() { m_counter = 0; }
-        T m_counter;
+        std::atomic<T> m_counter;
     };
 
     typedef counter<uint32, 0xFFFFFFFF> UInt32Counter;

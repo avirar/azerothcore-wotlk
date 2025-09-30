@@ -133,18 +133,36 @@ namespace MMAP
             return false;
         }
 
-        // get this mmap data
-        MMapData* mmap = loadedMMaps[mapId];
-        ASSERT(mmap->navMesh);
-
-        // check if we already have this tile loaded
         uint32 packedGridPos = packTileID(x, y);
+
+        // Phase 1: Fast read-only check with shared lock (allows concurrent reads)
+        {
+            std::shared_lock<std::shared_mutex> readLock(_loadMapMutex);
+
+            MMapData* mmap = loadedMMaps[mapId];
+            ASSERT(mmap->navMesh);
+
+            // check if we already have this tile loaded
+            if (mmap->loadedTileRefs.find(packedGridPos) != mmap->loadedTileRefs.end())
+            {
+                // Peiru: Commented out for now because Playerbots system uses this method to load or check loaded maps and will spam logs
+                // LOG_ERROR("maps", "MMAP:loadMap: Asked to load already loaded navmesh tile. {:03}{:02}{:02}.mmtile", mapId, x, y);
+                return false;
+            }
+        }
+
+        // Phase 2: Exclusive lock for tile loading (prevents concurrent modifications)
+        std::unique_lock<std::shared_mutex> writeLock(_loadMapMutex);
+
+        // Double-check after acquiring exclusive lock (another thread might have loaded it)
+        MMapData* mmap = loadedMMaps[mapId];
         if (mmap->loadedTileRefs.find(packedGridPos) != mmap->loadedTileRefs.end())
         {
-            // Peiru: Commented out for now because Playerbots system uses this method to load or check loaded maps and will spam logs
-//            LOG_ERROR("maps", "MMAP:loadMap: Asked to load already loaded navmesh tile. {:03}{:02}{:02}.mmtile", mapId, x, y);
             return false;
         }
+
+        // Release lock during file I/O to allow other non-conflicting operations
+        writeLock.unlock();
 
         // load this tile :: mmaps/MMMXXYY.mmtile
         std::string fileName = Acore::StringFormat(TILE_FILE_NAME_FORMAT, sConfigMgr->GetOption<std::string>("DataDir", "."), mapId, x, y);
@@ -180,6 +198,7 @@ namespace MMAP
         {
             LOG_ERROR("maps", "MMAP:loadMap: Bad header or data in mmap {:03}{:02}{:02}.mmtile", mapId, x, y);
             fclose(file);
+            dtFree(data);
             return false;
         }
 
@@ -187,11 +206,21 @@ namespace MMAP
 
         dtTileRef tileRef = 0;
 
+        // Re-acquire exclusive lock for data structure modifications
+        writeLock.lock();
+
+        // Triple-check in case another thread loaded while we were doing file I/O
+        if (mmap->loadedTileRefs.find(packedGridPos) != mmap->loadedTileRefs.end())
+        {
+            dtFree(data);
+            return false;
+        }
+
         // memory allocated for data is now managed by detour, and will be deallocated when the tile is removed
         if (dtStatusSucceed(mmap->navMesh->addTile(data, fileHeader.size, DT_TILE_FREE_DATA, 0, &tileRef)))
         {
             mmap->loadedTileRefs.insert(std::pair<uint32, dtTileRef>(packedGridPos, tileRef));
-            ++loadedTiles;
+            loadedTiles.fetch_add(1, std::memory_order_relaxed); // Atomic increment
             dtMeshHeader* header = (dtMeshHeader*)data;
             LOG_DEBUG("maps", "MMAP:loadMap: Loaded mmtile {:03}[{:02},{:02}] into {:03}[{:02},{:02}]", mapId, x, y, mapId, header->x, header->y);
             return true;

@@ -19,6 +19,7 @@
 #define _DYNTREE_H
 
 #include "Define.h"
+#include <shared_mutex>
 
 namespace G3D
 {
@@ -38,6 +39,9 @@ struct DynTreeImpl;
 class DynamicMapTree
 {
     DynTreeImpl* impl;
+
+    // Reader-writer mutex to prevent race conditions during concurrent access
+    mutable std::shared_mutex _treeMutex;
 
 public:
     DynamicMapTree();
