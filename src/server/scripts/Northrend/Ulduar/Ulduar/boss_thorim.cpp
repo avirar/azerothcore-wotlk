@@ -457,6 +457,14 @@ struct boss_thorim : public BossAI
                 if (GameObject* go = GetThorimObject(DATA_THORIM_LEVER))
                     go->RemoveGameObjectFlag((GameObjectFlags)48);
 
+                // Iron Ring Guards and the Runic Colossus spawn with UNIT_FLAG_IMMUNE_TO_PC until the arena event starts
+                summons.DoForAllSummons([](WorldObject* obj)
+                {
+                    if (Creature* c = obj->ToCreature())
+                        if (c->EntryEquals(NPC_IRON_RING_GUARD, NPC_RUNIC_COLOSSUS))
+                            c->RemoveUnitFlag(UNIT_FLAG_IMMUNE_TO_PC);
+                });
+
                 events.ScheduleEvent(EVENT_THORIM_AGGRO, 0ms);
                 events.SetPhase(EVENT_PHASE_START);
                 events.ScheduleEvent(EVENT_THORIM_START_PHASE1, 20s);
@@ -550,10 +558,12 @@ struct boss_thorim : public BossAI
                 if (_hardMode)
                     chestId += 1; // hard mode offset
 
-                if ((go = me->SummonGameObject(chestId, 2134.73f, -286.32f, 419.51f, 4.65f, 0, 0, 0, 0, 0)))
+                // Summoned by the map, not Thorim, so the chest survives his despawn during the outro.
+                if ((go = me->GetMap()->SummonGameObject(chestId, 2134.73f, -286.32f, 419.51f, 4.65f, 0, 0, 0, 0, 0)))
                 {
                     go->ReplaceAllGameObjectFlags((GameObjectFlags)0);
                     go->SetLootRecipient(me->GetMap());
+                    go->SetRespawnTime(7 * DAY);
                 }
 
                 // Defeat credit
@@ -1278,6 +1288,10 @@ struct boss_thorim_runic_colossus : public ScriptedAI
                 if (Creature* cr = me->GetInstanceScript()->GetCreature(BOSS_THORIM))
                     cr->AI()->Talk(SAY_SPECIAL_2);
             }
+
+            // The Ancient Rune Giant stays immune to players until the colossus falls
+            if (Creature* giant = me->FindNearestCreature(NPC_ANCIENT_RUNE_GIANT, 200.0f))
+                giant->RemoveUnitFlag(UNIT_FLAG_IMMUNE_TO_PC);
         }
 
         void JustEngagedWith(Unit*) override
@@ -1592,6 +1606,7 @@ public:
     }
 };
 
+// 63238 Lightning Pillar
 class spell_thorim_lightning_pillar_P2_aura : public AuraScript
 {
     PrepareAuraScript(spell_thorim_lightning_pillar_P2_aura);
@@ -1606,6 +1621,29 @@ class spell_thorim_lightning_pillar_P2_aura : public AuraScript
     void Register() override
     {
         OnEffectPeriodic += AuraEffectPeriodicFn(spell_thorim_lightning_pillar_P2_aura::OnPeriodic, EFFECT_0, SPELL_AURA_PERIODIC_TRIGGER_SPELL);
+    }
+};
+
+// 62976 Lightning Pillar
+class spell_thorim_lightning_pillar_P2 : public SpellScript
+{
+    PrepareSpellScript(spell_thorim_lightning_pillar_P2);
+
+    void SelectPillar(WorldObject*& target)
+    {
+        if (Unit* caster = GetCaster())
+        {
+            std::list<Creature*> pillars;
+            caster->GetCreatureListWithEntryInGrid(pillars, NPC_PILLAR, GetSpellInfo()->GetMaxRange());
+
+            if (!pillars.empty())
+                target = Acore::Containers::SelectRandomContainerElement(pillars);
+        }
+    }
+
+    void Register() override
+    {
+        OnObjectTargetSelect += SpellObjectTargetSelectFn(spell_thorim_lightning_pillar_P2::SelectPillar, EFFECT_0, TARGET_UNIT_NEARBY_ENTRY);
     }
 };
 
@@ -1679,6 +1717,7 @@ void AddSC_boss_thorim()
     new go_thorim_lever();
 
     // Spells
+    RegisterSpellScript(spell_thorim_lightning_pillar_P2);
     RegisterSpellScript(spell_thorim_lightning_pillar_P2_aura);
     RegisterSpellScript(spell_thorim_trash_impale_aura);
 

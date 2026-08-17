@@ -2,6 +2,7 @@
 # AzerothCore
 #
 
+.cache
 /conf/*
 !/conf/dist
 /modules/*
@@ -54,9 +55,16 @@ CMakeLists.txt.user
 *.LOCAL.*
 
 #
-# AI tools
+# Agents
 #
-.claude
+.agents/plans/**
+
+#
+# Claude
+#
+.claude/worktrees
+.claude/settings.local.json
+.claude/plans/**
 
 #
 # IDE & other software
@@ -100,6 +108,10 @@ local.properties
 # vcpkg integration
 /vcpkg/
 /vcpkg-ports/
+
+# Python bytecode cache
+__pycache__/
+*.py[cod]
 
 
 # ==================
