@@ -69,7 +69,7 @@ CDEBUG=OFF
 #    debugger and have address to source-file:line-number translation).
 # * RelWithDebInfo: optimized, *with* debug info, but no debug (output) code or asserts.
 # * MinSizeRel: same as Release but optimizing for size rather than speed.
-CTYPE=${CTYPE:-Release}
+CTYPE=${CTYPE:-RelWithDebInfo}
 
 # compile scripts
 CSCRIPTS=${CSCRIPTS:-static}
