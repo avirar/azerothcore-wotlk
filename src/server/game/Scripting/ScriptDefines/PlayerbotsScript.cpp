@@ -72,6 +72,14 @@ void ScriptMgr::OnPlayerbotPacketSent(Player* player, WorldPacket const* packet)
     });
 }
 
+void ScriptMgr::OnPlayerbotActionExecuted(Player* player, std::string const& actionName, ObjectGuid target)
+{
+    ExecuteScript<PlayerbotScript>([&](PlayerbotScript* script)
+    {
+        script->OnPlayerbotActionExecuted(player, actionName, target);
+    });
+}
+
 void ScriptMgr::OnPlayerbotUpdate(uint32 diff)
 {
     ExecuteScript<PlayerbotScript>([&](PlayerbotScript* script)
