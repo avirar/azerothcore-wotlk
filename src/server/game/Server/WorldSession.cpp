@@ -467,11 +467,13 @@ bool WorldSession::Update(uint32 diff, PacketFilter& updater)
                         if (!sScriptMgr->CanPacketReceive(this, *packet))
                             break;
 
-                        opHandle->Call(this, *packet);
-                        LogUnprocessedTail(packet);
 #ifdef MOD_PLAYERBOTS
+                        // Notify scripts before the handler runs: typed packets move their
+                        // payload into their WorldPackets wrapper, leaving this packet empty.
                         sScriptMgr->OnPacketReceived(this, *packet);
 #endif
+                        opHandle->Call(this, *packet);
+                        LogUnprocessedTail(packet);
                     }
 
                     // lag can cause STATUS_LOGGEDIN opcodes to arrive after the player started a transfer
@@ -488,11 +490,13 @@ bool WorldSession::Update(uint32 diff, PacketFilter& updater)
                         if (!sScriptMgr->CanPacketReceive(this, *packet))
                             break;
 
-                        opHandle->Call(this, *packet);
-                        LogUnprocessedTail(packet);
 #ifdef MOD_PLAYERBOTS
+                        // Notify scripts before the handler runs: typed packets move their
+                        // payload into their WorldPackets wrapper, leaving this packet empty.
                         sScriptMgr->OnPacketReceived(this, *packet);
 #endif
+                        opHandle->Call(this, *packet);
+                        LogUnprocessedTail(packet);
                     }
                     break;
                 case STATUS_TRANSFER:
@@ -501,11 +505,13 @@ bool WorldSession::Update(uint32 diff, PacketFilter& updater)
                         if (!sScriptMgr->CanPacketReceive(this, *packet))
                             break;
 
-                        opHandle->Call(this, *packet);
-                        LogUnprocessedTail(packet);
 #ifdef MOD_PLAYERBOTS
+                        // Notify scripts before the handler runs: typed packets move their
+                        // payload into their WorldPackets wrapper, leaving this packet empty.
                         sScriptMgr->OnPacketReceived(this, *packet);
 #endif
+                        opHandle->Call(this, *packet);
+                        LogUnprocessedTail(packet);
                     }
                     break;
                 case STATUS_AUTHED:
@@ -520,11 +526,13 @@ bool WorldSession::Update(uint32 diff, PacketFilter& updater)
                     if (!sScriptMgr->CanPacketReceive(this, *packet))
                         break;
 
-                    opHandle->Call(this, *packet);
-                    LogUnprocessedTail(packet);
 #ifdef MOD_PLAYERBOTS
+                    // Notify scripts before the handler runs: typed packets move their
+                    // payload into their WorldPackets wrapper, leaving this packet empty.
                     sScriptMgr->OnPacketReceived(this, *packet);
 #endif
+                    opHandle->Call(this, *packet);
+                    LogUnprocessedTail(packet);
                     break;
                 case STATUS_NEVER:
                     LOG_ERROR("network.opcode", "Received not allowed opcode {} from {}",
