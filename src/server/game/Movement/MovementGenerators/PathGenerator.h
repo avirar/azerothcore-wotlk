@@ -100,6 +100,19 @@ class PathGenerator
         // implicitly convert through uint16).
         void SetExcludeFlags(uint16 flags) { _filter.setExcludeFlags(flags); }
 
+        // Adjust per-area Detour traversal cost by raw area id. Used for the
+        // custom mob-avoidance areas 12/13, which are not NavTerrain values.
+        void SetAreaCost(uint32 area, float cost) { _filter.setAreaCost(static_cast<uint8>(area), cost); }
+
+        // Mark every navmesh poly within `range` yards of (x, y, z) with `area`
+        // (only-upgrade: never overwrites lava/slime or a higher-cost area).
+        // Ported from cmangos PathFinder::setArea (OG PathFinder.cpp:186).
+        void MarkNavArea(float x, float y, float z, uint32 area, float range);
+
+        // Debug/inspection: read the navmesh area / flags at (x, y, z).
+        uint32 GetArea(float x, float y, float z) const;
+        unsigned short GetFlags(float x, float y, float z) const;
+
         // result getters
         [[nodiscard]] G3D::Vector3 const& GetStartPosition() const { return _startPosition; }
         [[nodiscard]] G3D::Vector3 const& GetEndPosition() const { return _endPosition; }

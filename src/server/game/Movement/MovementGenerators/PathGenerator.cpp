@@ -797,7 +797,14 @@ void PathGenerator::CreateFilter()
     // Bots bias their routes away from deep water (swim only when necessary). poly.area == poly.flags ==
     // NavTerrain, so NAV_WATER doubles as the water area index. Real players and creatures assign no cost.
     if (isBot)
+    {
         _filter.setAreaCost(NAV_WATER, 20.0f);
+        // Custom mob-avoidance areas (see MarkNavArea). 12 = mob proximity (cheap to cross),
+        // 13 = mob aggro (expensive). These ids are identical to the cmangos numbering and must
+        // not be mapped onto NAV_* terrain values.
+        _filter.setAreaCost(12, 5.0f);
+        _filter.setAreaCost(13, 20.0f);
+    }
 #endif
 
     UpdateFilter();
@@ -823,6 +830,97 @@ void PathGenerator::UpdateFilter()
             if (_sourceCreature->IsInCombat() || _sourceCreature->IsInEvadeMode())
                 _filter.setIncludeFlags(_filter.getIncludeFlags() | NAV_GROUND_STEEP);*/
     }
+}
+
+void PathGenerator::MarkNavArea(float x, float y, float z, uint32 area, float range)
+{
+    if (!Acore::IsValidMapCoord(x, y, z) || !_navMesh || !_navMeshQuery)
+        return;
+
+    // Adapted from cmangos PathFinder::setArea (OG PathFinder.cpp:186, commit 7a6b9587f1).
+    // Reference bugs fixed here (marked): the original shadowed dtStatus inside the loop and
+    // re-checked the stale findNearestPoly result after findPolysAroundCircle. We check
+    // findPolysAroundCircle's own status, and match AC's recastnavigation argument layout
+    // (resultParent/resultCost optional, resultCount required).
+    dtQueryFilter filter;
+    filter.setIncludeFlags(NAV_GROUND | NAV_WATER);
+    filter.setExcludeFlags(NAV_MAGMA | NAV_SLIME | NAV_GROUND_STEEP);
+
+    float point[VERTEX_SIZE] = { y, z, x };
+    float extents[VERTEX_SIZE] = { 5.0f, 5.0f, 5.0f };
+    float closestPoint[VERTEX_SIZE] = { 0.0f, 0.0f, 0.0f };
+
+    dtPolyRef polyRef = INVALID_POLYREF;
+    dtStatus dtResult = _navMeshQuery->findNearestPoly(point, extents, &filter, &polyRef, closestPoint);
+    if (dtStatusFailed(dtResult) || polyRef == INVALID_POLYREF)
+        return;
+
+    constexpr int MAX_POLYS = 2560;
+    dtPolyRef polys[MAX_POLYS];
+    int polyCount = 0;
+
+    dtResult = _navMeshQuery->findPolysAroundCircle(polyRef, closestPoint, range, &filter,
+        polys, nullptr, nullptr, &polyCount, MAX_POLYS);
+    if (dtStatusFailed(dtResult))
+        return;
+
+    dtNavMesh* navMesh = const_cast<dtNavMesh*>(_navMesh);
+    for (int i = 0; i < polyCount; ++i)
+    {
+        unsigned char curArea = 0;
+        if (dtStatusFailed(navMesh->getPolyArea(polys[i], &curArea)))
+            continue;
+
+        // Only-upgrade guard. cmangos NAV_AREA_MAGMA_SLIME == 8 in its numbering; AC splits
+        // MAGMA (2) and SLIME (4). Never overwrite lava/slime, and never downgrade a poly that
+        // already carries a higher area value.
+        if (curArea != NAV_MAGMA && curArea != NAV_SLIME && curArea < area)
+            navMesh->setPolyArea(polys[i], static_cast<unsigned char>(area));
+    }
+}
+
+uint32 PathGenerator::GetArea(float x, float y, float z) const
+{
+    if (!Acore::IsValidMapCoord(x, y, z) || !_navMesh || !_navMeshQuery)
+        return 99;
+
+    dtQueryFilter filter;
+    dtPolyRef polyRef = INVALID_POLYREF;
+    float point[VERTEX_SIZE] = { y, z, x };
+    float extents[VERTEX_SIZE] = { 5.0f, 5.0f, 5.0f };
+    float closestPoint[VERTEX_SIZE] = { 0.0f, 0.0f, 0.0f };
+
+    dtStatus dtResult = _navMeshQuery->findNearestPoly(point, extents, &filter, &polyRef, closestPoint);
+    if (dtStatusFailed(dtResult) || polyRef == INVALID_POLYREF)
+        return 99;
+
+    unsigned char area = 0;
+    if (dtStatusFailed(_navMesh->getPolyArea(polyRef, &area)))
+        return 99;
+
+    return area;
+}
+
+unsigned short PathGenerator::GetFlags(float x, float y, float z) const
+{
+    if (!Acore::IsValidMapCoord(x, y, z) || !_navMesh || !_navMeshQuery)
+        return 0;
+
+    dtQueryFilter filter;
+    dtPolyRef polyRef = INVALID_POLYREF;
+    float point[VERTEX_SIZE] = { y, z, x };
+    float extents[VERTEX_SIZE] = { 5.0f, 5.0f, 5.0f };
+    float closestPoint[VERTEX_SIZE] = { 0.0f, 0.0f, 0.0f };
+
+    dtStatus dtResult = _navMeshQuery->findNearestPoly(point, extents, &filter, &polyRef, closestPoint);
+    if (dtStatusFailed(dtResult) || polyRef == INVALID_POLYREF)
+        return 0;
+
+    unsigned short flags = 0;
+    if (dtStatusFailed(_navMesh->getPolyFlags(polyRef, &flags)))
+        return 0;
+
+    return flags;
 }
 
 NavTerrain PathGenerator::GetNavTerrain(float x, float y, float z) const
