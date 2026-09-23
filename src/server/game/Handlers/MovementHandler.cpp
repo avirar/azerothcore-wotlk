@@ -429,6 +429,26 @@ void WorldSession::SynchronizeMovement(MovementInfo& movementInfo)
 
 void WorldSession::HandleMoverRelocation(MovementInfo& movementInfo, Unit* mover)
 {
+    // TEMP-CAPTURE (mod-playerbots transport investigation, 2026-09-23) —
+    // full client movement-packet capture around the Moonspray Rut'Theran
+    // dock. REMOVE AFTER RUN.
+    if (mover->IsPlayer() &&
+        ((mover->GetMapId() == 1 && movementInfo.pos.GetPositionX() > 8300.0f && movementInfo.pos.GetPositionX() < 8800.0f &&
+          movementInfo.pos.GetPositionY() > 850.0f && movementInfo.pos.GetPositionY() < 1200.0f) ||
+         (mover->GetMapId() == 530 && movementInfo.pos.GetPositionX() > -4400.0f && movementInfo.pos.GetPositionX() < -4100.0f &&
+          movementInfo.pos.GetPositionY() > -11500.0f && movementInfo.pos.GetPositionY() < -11100.0f)))
+    {
+        LOG_INFO("entities.transport",
+                 "[CAPTURE] HandleMoverRelocation ENTRY: {} (guid {}) map{} clientPacket: pos=({:.2f},{:.2f},{:.2f},o={:.2f}) flags=0x{:x} flags2=0x{:x} transportGuid={} transportPos=({:.2f},{:.2f},{:.2f}) seat={}",
+                 mover->GetName(), mover->GetGUID().ToString(), mover->GetMapId(),
+                 movementInfo.pos.GetPositionX(), movementInfo.pos.GetPositionY(), movementInfo.pos.GetPositionZ(), movementInfo.pos.GetOrientation(),
+                 (unsigned)movementInfo.flags, (unsigned)movementInfo.flags2,
+                 movementInfo.transport.guid.ToString(),
+                 movementInfo.transport.pos.GetPositionX(), movementInfo.transport.pos.GetPositionY(), movementInfo.transport.pos.GetPositionZ(),
+                 (int)movementInfo.transport.seat);
+        movementInfo.OutDebug();
+    }
+
     SynchronizeMovement(movementInfo);
 
     mover->UpdatePosition(movementInfo.pos);
@@ -483,6 +503,25 @@ void WorldSession::HandleMoverRelocation(MovementInfo& movementInfo, Unit* mover
             mover->SetTransport(nullptr);
             movementInfo.transport.Reset();
         }
+    }
+
+    // TEMP-CAPTURE exit — the server-committed state after the transport
+    // branch (what the server actually attached/detached). REMOVE AFTER RUN.
+    if (mover->IsPlayer() &&
+        ((mover->GetMapId() == 1 && mover->GetPositionX() > 8300.0f && mover->GetPositionX() < 8800.0f &&
+          mover->GetPositionY() > 850.0f && mover->GetPositionY() < 1200.0f) ||
+         (mover->GetMapId() == 530 && mover->GetPositionX() > -4400.0f && mover->GetPositionX() < -4100.0f &&
+          mover->GetPositionY() > -11500.0f && mover->GetPositionY() < -11100.0f)))
+    {
+        LOG_INFO("entities.transport",
+                 "[CAPTURE] HandleMoverRelocation EXIT: {} (guid {}) serverState: pos=({:.2f},{:.2f},{:.2f}) flags=0x{:x} ONTRANSPORT={} transport={}({} guid={})",
+                 mover->GetName(), mover->GetGUID().ToString(),
+                 mover->GetPositionX(), mover->GetPositionY(), mover->GetPositionZ(),
+                 (unsigned)mover->m_movementInfo.flags,
+                 mover->m_movementInfo.HasMovementFlag(MOVEMENTFLAG_ONTRANSPORT) ? 1 : 0,
+                 mover->GetTransport() ? mover->GetTransport()->GetEntry() : 0,
+                 mover->GetTransport() ? mover->GetTransport()->GetName() : std::string("-"),
+                 mover->GetTransport() ? (int64)mover->GetTransport()->GetGUID().GetCounter() : 0);
     }
 
     // Some vehicles allow the passenger to turn by himself

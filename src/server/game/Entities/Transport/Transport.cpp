@@ -349,7 +349,14 @@ void MotionTransport::UpdatePosition(float x, float y, float z, float o)
 void MotionTransport::AddPassenger(WorldObject* passenger, bool withAll)
 {
     std::lock_guard<std::mutex> guard(Lock);
-    if (_passengers.insert(passenger).second)
+    bool const inserted = _passengers.insert(passenger).second;
+    // TEMP-CAPTURE (transport boarding study)
+    if (Player* plr = passenger->ToPlayer())
+        LOG_DEBUG("entities.transport", "[CAPTURE] AddPassenger: transport {} ({}) passenger '{}' ({}) withAll={} pos=({:.2f},{:.2f},{:.2f}) map{} -> {}",
+            GetEntry(), GetName(), plr->GetName(), plr->GetGUID().ToString(), withAll,
+            passenger->GetPositionX(), passenger->GetPositionY(), passenger->GetPositionZ(), passenger->GetMapId(),
+            inserted ? std::string("inserted") : std::string("SKIP (already passenger)"));
+    if (inserted)
     {
         if (Player* plr = passenger->ToPlayer())
             sScriptMgr->OnAddPassenger(ToTransport(), plr);
@@ -378,7 +385,14 @@ void MotionTransport::AddPassenger(WorldObject* passenger, bool withAll)
 void MotionTransport::RemovePassenger(WorldObject* passenger, bool withAll)
 {
     std::lock_guard<std::mutex> guard(Lock);
-    if (_passengers.erase(passenger) || _staticPassengers.erase(passenger))
+    bool const erased = _passengers.erase(passenger) || _staticPassengers.erase(passenger);
+    // TEMP-CAPTURE (transport boarding study)
+    if (Player* plr = passenger->ToPlayer())
+        LOG_DEBUG("entities.transport", "[CAPTURE] RemovePassenger: transport {} ({}) passenger '{}' ({}) withAll={} pos=({:.2f},{:.2f},{:.2f}) map{} -> {}",
+            GetEntry(), GetName(), plr->GetName(), plr->GetGUID().ToString(), withAll,
+            passenger->GetPositionX(), passenger->GetPositionY(), passenger->GetPositionZ(), passenger->GetMapId(),
+            erased ? std::string("erased") : std::string("NOOP (not a passenger)"));
+    if (erased)
     {
         if (Player* plr = passenger->ToPlayer())
         {

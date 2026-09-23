@@ -341,7 +341,15 @@ bool Map::AddToMap(T* obj, bool checkTransport)
     if (checkTransport)
         if (!(obj->IsGameObject() && obj->ToGameObject()->IsTransport())) // dont add transport to transport ;d
             if (Transport* transport = GetTransportForPos(obj->GetPhaseMask(), obj->GetPositionX(), obj->GetPositionY(), obj->GetPositionZ(), obj))
+            {
+                // TEMP-CAPTURE (transport boarding study): log the board decision for players.
+                if (obj->IsPlayer())
+                    LOG_DEBUG("entities.transport",
+                        "[CAPTURE] AddToMap board-check: player '{}' ({}) map {} at ({}, {}, {}) -> transport {} ({})",
+                        obj->GetName(), obj->GetGUID().ToString(), GetId(), obj->GetPositionX(), obj->GetPositionY(),
+                        obj->GetPositionZ(), transport->GetEntry(), transport->GetName());
                 transport->AddPassenger(obj, true);
+            }
 
     InitializeObject(obj);
 
@@ -1162,16 +1170,17 @@ Transport* Map::GetTransportForPos(uint32 phase, float x, float y, float z, Worl
 {
     G3D::Vector3 v(x, y, z + 2.0f);
     G3D::Ray r(v, G3D::Vector3(0, 0, -1));
-    for (TransportsContainer::const_iterator itr = _transports.begin(); itr != _transports.end(); ++itr)
+    Transport* result = nullptr;
+    for (TransportsContainer::const_iterator itr = _transports.begin(); itr != _transports.end() && !result; ++itr)
         if ((*itr)->IsInWorld() && (*itr)->GetExactDistSq(x, y, z) < 75.0f * 75.0f && (*itr)->m_model)
         {
             float dist = 30.0f;
             bool hit = (*itr)->m_model->intersectRay(r, dist, false, phase, VMAP::ModelIgnoreFlags::Nothing);
             if (hit)
-                return *itr;
+                result = *itr;
         }
 
-    if (worldobject)
+    if (!result && worldobject)
         if (GameObject* staticTrans = worldobject->FindNearestGameObjectOfType(GAMEOBJECT_TYPE_TRANSPORT, 75.0f))
             if (staticTrans->m_model)
             {
@@ -1179,10 +1188,20 @@ Transport* Map::GetTransportForPos(uint32 phase, float x, float y, float z, Worl
                 bool hit = staticTrans->m_model->intersectRay(r, dist, false, phase, VMAP::ModelIgnoreFlags::Nothing);
                 if (hit)
                     if (GetHeight(phase, x, y, z, true, 30.0f) < (v.z - dist + 1.0f))
-                        return staticTrans->ToTransport();
+                        result = staticTrans->ToTransport();
             }
 
-    return nullptr;
+    // TEMP-CAPTURE (transport boarding study, generic): log whenever a player
+    // near ANY transport (any boat/zeppelin/gunship/turtle, any map) resolves
+    // a boarding hit. Low-frequency (only fires inside the 75y search radius
+    // with a collision ray hitting the model), so no region gating is needed.
+    if (worldobject && worldobject->IsPlayer() && result)
+        LOG_INFO("entities.transport",
+            "[CAPTURE] GetTransportForPos: player '{}' ({}) map {} at ({:.2f},{:.2f},{:.2f}) -> {} '{}'",
+            worldobject->GetName(), worldobject->GetGUID().ToString(), GetId(), x, y, z,
+            result->GetEntry(), result->GetName());
+
+    return result;
 }
 
 float Map::GetHeight(float x, float y, float z, bool checkVMap /*= true*/, float maxSearchDist /*= DEFAULT_HEIGHT_SEARCH*/) const
