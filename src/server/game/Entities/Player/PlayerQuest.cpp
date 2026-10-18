@@ -920,6 +920,8 @@ void Player::FailQuest(uint32 questId)
 
         SetQuestStatus(questId, QUEST_STATUS_FAILED);
 
+        sScriptMgr->OnPlayerQuestFailed(this, questId);
+
         uint16 log_slot = FindQuestSlot(questId);
 
         if (log_slot < MAX_QUEST_LOG_SIZE)
