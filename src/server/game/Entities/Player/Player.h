@@ -2092,6 +2092,7 @@ public:
         StopMirrorTimer(FIRE_TIMER);
     }
     bool IsMirrorTimerActive(MirrorTimerType type) { return m_MirrorTimer[type] == getMaxTimer(type); }
+    [[nodiscard]] int32 GetMirrorTimer(MirrorTimerType type) const { return m_MirrorTimer[type]; }
 
     bool CanJoinConstantChannelInZone(ChatChannelsEntry const* channel, AreaTableEntry const* zone);
 
