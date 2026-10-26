@@ -31,8 +31,12 @@ void EscortMovementGenerator<T>::DoInitialize(T* unit)
     i_recalculateSpeed = false;
     Movement::MoveSplineInit init(unit);
 
+    // A forced-fly path must keep its authored Z. Generating a ground path snaps the
+    // destination to the terrain, so the unit climbs/falls along the ground instead of flying
+    // to the requested altitude.
+    bool const generatePath = _forcedMovement != FORCED_MOVEMENT_FLY;
     if (m_precomputedPath.size() == 2) // xinef: simple case, just call move to
-        init.MoveTo(m_precomputedPath[1].x, m_precomputedPath[1].y, m_precomputedPath[1].z, true);
+        init.MoveTo(m_precomputedPath[1].x, m_precomputedPath[1].y, m_precomputedPath[1].z, generatePath);
     else if (m_precomputedPath.size())
         init.MovebyPath(m_precomputedPath);
 
@@ -80,10 +84,11 @@ bool EscortMovementGenerator<T>::DoUpdate(T* unit, uint32  /*diff*/)
             // restore 0 element (current position)
             m_precomputedPath.insert(m_precomputedPath.begin(), G3D::Vector3(unit->GetPositionX(), unit->GetPositionY(), unit->GetPositionZ()));
 
+            bool const generatePath = _forcedMovement != FORCED_MOVEMENT_FLY;
             if (m_precomputedPath.size() > 2)
                 init.MovebyPath(m_precomputedPath);
             else if (m_precomputedPath.size() == 2)
-                init.MoveTo(m_precomputedPath[1].x, m_precomputedPath[1].y, m_precomputedPath[1].z, true);
+                init.MoveTo(m_precomputedPath[1].x, m_precomputedPath[1].y, m_precomputedPath[1].z, generatePath);
         }
 
         if (_forcedMovement == FORCED_MOVEMENT_WALK)
