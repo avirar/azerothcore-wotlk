@@ -1307,6 +1307,7 @@ int main(int argc, char** argv)
     std::cout << "nav3d_generator cell " << options.CellSize << " tiles " << requests.size()
               << " output " << options.OutputDir << "\n";
 
+    size_t failed = 0;
     for (TileRequest const& request : requests)
     {
         Options tileOptions = options;
@@ -1315,8 +1316,12 @@ int main(int argc, char** argv)
                                    ? GenerateTerrainWaterTile(tileOptions, request.TileX, request.TileY)
                                    : GenerateTile(tileOptions, request.TileX, request.TileY);
         if (!generated)
-            return 1;
+        {
+            std::cerr << "failed map " << request.MapId << " tile " << request.TileX << ":" << request.TileY
+                      << "\n";
+            ++failed;
+        }
     }
 
-    return 0;
+    return failed == 0 ? 0 : 1;
 }
