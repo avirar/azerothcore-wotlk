@@ -1185,7 +1185,7 @@ namespace
         header.SizeX = uint32(width);
         header.SizeY = uint32(height);
         header.SizeZ = uint32(sizeZ);
-        header.Flags |= Nav3D::FlagHasSolid;
+        header.Flags |= Nav3D::FlagHasSolid | Nav3D::FlagLiveLos;
         header.GeneratorVersion = kGeneratorVersion;
         header.GeometryHash = 0;
 
@@ -1263,6 +1263,7 @@ namespace
                   << " box-blocked)\n";
         return true;
     }
+}
 
 int main(int argc, char** argv)
 {

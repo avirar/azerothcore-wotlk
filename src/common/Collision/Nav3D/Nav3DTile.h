@@ -30,6 +30,7 @@ namespace Nav3D
     constexpr uint8 FlagCompressed = 0x01;
     constexpr uint8 FlagDenseColumns = 0x02;
     constexpr uint8 FlagHasSolid = 0x04;
+    constexpr uint8 FlagLiveLos = 0x08;
     constexpr float ClearanceUnit = 0.25f;
 }
 
