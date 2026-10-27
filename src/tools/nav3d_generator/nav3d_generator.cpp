@@ -69,6 +69,7 @@ namespace
         bool HasMinZ = false;
         float MinZ = 0.0f;
         bool TerrainOnly = false;
+        bool Air = false;
         std::set<std::pair<uint32, uint32>> Tiles;
         std::vector<TileRequest> Requests;
     };
@@ -86,7 +87,8 @@ namespace
                   << "  --radius <yd>        Radius around the center (default: 0)\n"
                   << "  --water-level <z>    Fill water up to this Z (default: local liquid surface)\n"
                   << "  --min-z <z>          Lowest Z included in the tile (default: mesh min)\n"
-                  << "  --terrain-only       Read .map terrain/liquid directly (offline water; no WMO)\n";
+                  << "  --terrain-only       Read .map terrain/liquid directly (offline water; no WMO)\n"
+                  << "  --air                Write a terrain air-heightmap tile (_air.n3t)\n";
     }
 
     bool ParseFloat(std::string const& text, float& value)
@@ -246,6 +248,10 @@ namespace
             else if (arg == "--terrain-only")
             {
                 options.TerrainOnly = true;
+            }
+            else if (arg == "--air")
+            {
+                options.Air = true;
             }
             else if (arg == "--help" || arg == "-h")
             {
@@ -1263,6 +1269,134 @@ namespace
                   << " box-blocked)\n";
         return true;
     }
+
+    bool GenerateTerrainAirTile(Options const& options, uint32 tileX, uint32 tileY)
+    {
+        TerrainMapFile mapData;
+        if (!LoadTerrainMap(options, tileX, tileY, mapData) || !mapData.HasHeight)
+        {
+            std::cout << "skip map " << options.MapId << " tile " << tileX << ":" << tileY
+                      << " (no readable terrain)\\n";
+            return true;
+        }
+
+        float minTerrain = std::numeric_limits<float>::max();
+        float maxTerrain = -std::numeric_limits<float>::max();
+        for (float heightValue : mapData.V9)
+        {
+            minTerrain = std::min(minTerrain, heightValue);
+            maxTerrain = std::max(maxTerrain, heightValue);
+        }
+        if (minTerrain > maxTerrain)
+        {
+            std::cout << "skip map " << options.MapId << " tile " << tileX << ":" << tileY
+                      << " (empty terrain)\\n";
+            return true;
+        }
+
+        float const cellSize = options.CellSize;
+        float const originX = (32.0f - float(tileX)) * MMAP::GRID_SIZE - MMAP::GRID_SIZE;
+        float const originY = (32.0f - float(tileY)) * MMAP::GRID_SIZE - MMAP::GRID_SIZE;
+        int const width = int(std::ceil(MMAP::GRID_SIZE / cellSize));
+        int const height = int(std::ceil(MMAP::GRID_SIZE / cellSize));
+        float const minZ = std::max(-1000.0f, minTerrain - 10.0f);
+        // A single air interval is stored per column, so a high ceiling does not grow the
+        // payload. Cover the full 3.3.5 flight envelope, not just this tile's peaks.
+        float const maxZ = 4000.0f;
+        int const sizeZ = std::max(1, int(std::ceil((maxZ - minZ) / cellSize)));
+        size_t const cellCount = size_t(width) * size_t(height) * size_t(sizeZ);
+        if (sizeZ > 32767 || cellCount > kMaxVoxelCells)
+        {
+            std::cout << "skip map " << options.MapId << " tile " << tileX << ":" << tileY
+                      << " (air grid too large: " << cellCount << ")\\n";
+            return true;
+        }
+
+        auto const cellIndex = [width, height, sizeZ](int x, int y, int z) -> size_t
+        {
+            return (size_t(z) * size_t(height) + size_t(y)) * size_t(width) + size_t(x);
+        };
+
+        Nav3DTile tile;
+        Nav3DTileHeader& header = tile.Header();
+        header.MapId = options.MapId;
+        header.TileX = uint16(tileX);
+        header.TileY = uint16(tileY);
+        header.Medium = Nav3D::MediumAir;
+        header.CellSize = cellSize;
+        header.OriginX = originX;
+        header.OriginY = originY;
+        header.OriginZ = minZ;
+        header.ExtentX = float(width) * cellSize;
+        header.ExtentY = float(height) * cellSize;
+        header.ExtentZ = float(sizeZ) * cellSize;
+        header.SizeX = uint32(width);
+        header.SizeY = uint32(height);
+        header.SizeZ = uint32(sizeZ);
+        header.Flags |= Nav3D::FlagHasSolid | Nav3D::FlagLiveLos;
+        header.GeneratorVersion = kGeneratorVersion;
+        header.GeometryHash = 0;
+
+        tile.Columns().resize(size_t(width) * size_t(height));
+        size_t airColumns = 0;
+        for (int y = 0; y < height; ++y)
+        {
+            for (int x = 0; x < width; ++x)
+            {
+                float floor = -1000.0f;
+                // Sample the cell footprint so a 4-yd air cell does not cut a terrain spike.
+                for (int sy = 0; sy < 3; ++sy)
+                {
+                    for (int sx = 0; sx < 3; ++sx)
+                    {
+                        float const wx = originX + (float(x) + (float(sx) + 0.5f) / 3.0f) * cellSize;
+                        float const wy = originY + (float(y) + (float(sy) + 0.5f) / 3.0f) * cellSize;
+                        float const h = TerrainHeight(mapData, wx, wy);
+                        if (h > -1000.0f)
+                            floor = std::max(floor, h);
+                    }
+                }
+                if (floor <= -1000.0f)
+                    continue;
+
+                int const firstZ = std::clamp(int(std::ceil((floor + kBodyHalfHeight - minZ) / cellSize)), 0,
+                                              sizeZ);
+                if (firstZ >= sizeZ)
+                    continue;
+
+                Nav3DTileColumn& column = tile.Columns()[size_t(y) * size_t(width) + size_t(x)];
+                Nav3DTileInterval interval;
+                interval.ZMin = int16(firstZ);
+                interval.ZMax = int16(sizeZ - 1);
+                interval.Clearance = 16;
+                interval.Flags = 0;
+                column.IntervalOffset = uint32(tile.Intervals().size());
+                column.IntervalCount = 1;
+                tile.Intervals().push_back(interval);
+                ++airColumns;
+            }
+        }
+
+        std::string const relative = Acore::StringFormat("map{:04}/{}_{}_air.n3t", options.MapId, tileX,
+                                                         tileY);
+        std::filesystem::path const outputFile = std::filesystem::path(options.OutputDir) / relative;
+        std::error_code ec;
+        std::filesystem::create_directories(outputFile.parent_path(), ec);
+        if (ec)
+        {
+            std::cerr << "cannot create " << outputFile.parent_path() << ": " << ec.message() << "\n";
+            return false;
+        }
+        if (!tile.Save(outputFile.string()))
+        {
+            std::cerr << "failed to write " << outputFile << "\n";
+            return false;
+        }
+
+        std::cout << "wrote " << outputFile << " (" << airColumns << " air columns, " << sizeZ
+                  << " z cells, " << tile.Intervals().size() << " intervals)\n";
+        return true;
+    }
 }
 
 int main(int argc, char** argv)
@@ -1312,9 +1446,11 @@ int main(int argc, char** argv)
     {
         Options tileOptions = options;
         tileOptions.MapId = request.MapId;
-        bool const generated = tileOptions.TerrainOnly
-                                   ? GenerateTerrainWaterTile(tileOptions, request.TileX, request.TileY)
-                                   : GenerateTile(tileOptions, request.TileX, request.TileY);
+        bool const generated = tileOptions.Air
+                                   ? GenerateTerrainAirTile(tileOptions, request.TileX, request.TileY)
+                                   : tileOptions.TerrainOnly
+                                         ? GenerateTerrainWaterTile(tileOptions, request.TileX, request.TileY)
+                                         : GenerateTile(tileOptions, request.TileX, request.TileY);
         if (!generated)
         {
             std::cerr << "failed map " << request.MapId << " tile " << request.TileX << ":" << request.TileY
