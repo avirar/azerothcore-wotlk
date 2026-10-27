@@ -24,7 +24,8 @@ if (TOOLS_BUILD MATCHES "-only")
   set(BUILD_TOOLS_USE_WHITELIST ON)
 
   if (TOOLS_BUILD STREQUAL "maps-only")
-    list(APPEND BUILD_TOOLS_WHITELIST map_extractor mmaps_generator vmap4_assembler vmap4_extractor)
+    list(APPEND BUILD_TOOLS_WHITELIST map_extractor mmaps_generator nav3d_generator vmap4_assembler
+         vmap4_extractor)
   endif()
 
   if (TOOLS_BUILD STREQUAL "db-only")
@@ -99,6 +100,10 @@ foreach(TOOL_NAME ${TOOLS_BUILD_LIST})
   CollectSourceFiles(
     ${SOURCE_TOOL_PATH}
     TOOL_PRIVATE_SOURCES)
+
+  if (TOOL_NAME STREQUAL "nav3d_generator")
+    list(APPEND TOOL_PRIVATE_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/mmaps_generator/TerrainBuilder.cpp)
+  endif()
 
   if (WIN32)
     list(APPEND TOOL_PRIVATE_SOURCES ${winDebugging})

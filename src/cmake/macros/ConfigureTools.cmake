@@ -72,7 +72,8 @@ function(CheckToolsBuildList)
     set(BUILD_TOOLS_USE_WHITELIST ON)
 
     if (TOOLS_BUILD STREQUAL "maps-only")
-      list(APPEND BUILD_TOOLS_WHITELIST map_extractor mmaps_generator vmap4_assembler vmap4_extractor)
+      list(APPEND BUILD_TOOLS_WHITELIST map_extractor mmaps_generator nav3d_generator vmap4_assembler
+           vmap4_extractor)
     endif()
 
     if (TOOLS_BUILD STREQUAL "db-only")
