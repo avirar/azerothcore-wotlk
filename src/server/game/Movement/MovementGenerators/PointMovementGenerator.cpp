@@ -98,6 +98,10 @@ void PointMovementGenerator<T>::DoInitialize(T* unit)
     else if (_forcedMovement == FORCED_MOVEMENT_RUN)
         init.SetWalk(false);
 
+    // Round the corners of multi-point player swim paths instead of following the polyline.
+    if (Movement::ShouldSmoothSwim(unit, init.Path().size()))
+        init.SetSmooth();
+
     if (i_orientation > 0.0f)
     {
         init.SetFacing(i_orientation);
@@ -231,6 +235,9 @@ bool PointMovementGenerator<T>::DoUpdate(T* unit, uint32 diff)
             init.SetWalk(true);
         else if (_forcedMovement == FORCED_MOVEMENT_RUN)
             init.SetWalk(false);
+
+        if (Movement::ShouldSmoothSwim(unit, init.Path().size()))
+            init.SetSmooth();
 
         if (_animTier)
             init.SetAnimation(*_animTier);

@@ -157,6 +157,14 @@ namespace Movement
     inline void MoveSplineInit::SetFly() { args.flags.EnableFlying(); }
     inline void MoveSplineInit::SetWalk(bool enable) { args.walk = enable; }
     inline void MoveSplineInit::SetSmooth() { args.flags.EnableCatmullRom(); }
+
+    // Flying paths get CatmullRom interpolation from the Flying flag. Player swim paths are
+    // otherwise launched as polylines, which makes multi-point swim routes turn in hard
+    // corners. Use the same curve for swims with enough control points to be meaningful.
+    inline bool ShouldSmoothSwim(Unit const* unit, size_t pathPoints)
+    {
+        return pathPoints > 2 && unit->IsPlayer() && unit->IsInWater();
+    }
     inline void MoveSplineInit::SetCyclic() { args.flags.cyclic = true; }
     inline void MoveSplineInit::SetFall() { args.flags.EnableFalling(); }
     inline void MoveSplineInit::SetVelocity(float vel) { args.velocity = vel; args.HasVelocity = true; }

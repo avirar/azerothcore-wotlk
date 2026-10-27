@@ -47,6 +47,9 @@ void EscortMovementGenerator<T>::DoInitialize(T* unit)
     else if (_forcedMovement == FORCED_MOVEMENT_FLY)
         init.SetFly();
 
+    if (_forcedMovement != FORCED_MOVEMENT_FLY && Movement::ShouldSmoothSwim(unit, init.Path().size()))
+        init.SetSmooth();
+
     init.Launch();
 
     _splineId = unit->movespline->GetId();
@@ -97,6 +100,9 @@ bool EscortMovementGenerator<T>::DoUpdate(T* unit, uint32  /*diff*/)
             init.SetWalk(false);
         else if (_forcedMovement == FORCED_MOVEMENT_FLY)
             init.SetFly();
+
+        if (_forcedMovement != FORCED_MOVEMENT_FLY && Movement::ShouldSmoothSwim(unit, init.Path().size()))
+            init.SetSmooth();
 
         init.Launch();
         // Xinef: Override spline Id on recalculate launch

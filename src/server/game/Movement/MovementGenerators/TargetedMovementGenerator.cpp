@@ -202,6 +202,8 @@ bool ChaseMovementGenerator<T>::DispatchSplineToPosition(T* owner, float x, floa
     if (target)
         init.SetFacing(GetTarget());
     init.SetWalk(walk);
+    if (Movement::ShouldSmoothSwim(owner, init.Path().size()))
+        init.SetSmooth();
     init.Launch();
 
     return true;
@@ -737,6 +739,9 @@ bool FollowMovementGenerator<T>::DoUpdate(T* owner, uint32 time_diff)
         init.MovebyPath(i_path->GetPath());
         if (_inheritWalkState)
             init.SetWalk(target->IsWalking());
+
+        if (Movement::ShouldSmoothSwim(owner, init.Path().size()))
+            init.SetSmooth();
 
         if (_inheritSpeed)
             if (Optional<float> velocity = GetVelocity(owner, target, i_path->GetActualEndPosition(), owner->IsGuardian()))
