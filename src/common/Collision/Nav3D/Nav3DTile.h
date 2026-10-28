@@ -27,6 +27,7 @@ namespace Nav3D
     constexpr uint16 TileHeaderSize = 82;
     constexpr uint8 MediumWater = 1;
     constexpr uint8 MediumAir = 2;
+    constexpr uint8 MediumAirDetail = 3;  // local 1-yd WMO/cave detail tile
     constexpr uint8 FlagCompressed = 0x01;
     constexpr uint8 FlagDenseColumns = 0x02;
     constexpr uint8 FlagHasSolid = 0x04;
