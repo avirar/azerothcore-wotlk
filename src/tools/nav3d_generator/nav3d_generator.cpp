@@ -80,6 +80,8 @@ namespace
         float MinZ = 0.0f;
         bool HasMaxZ = false;
         float MaxZ = 0.0f;
+        bool HasMaxDepth = false;
+        float MaxDepth = 200.0f;
         bool TerrainOnly = false;
         bool Air = false;
         bool AirVolume = false;
@@ -118,6 +120,7 @@ namespace
                   << "  --water-level <z>    Fill water up to this Z (default: local liquid surface)\n"
                   << "  --min-z <z>          Lowest Z included in the tile (default: mesh min)\n"
                   << "  --max-z <z>          Highest Z included in the tile (default: mesh max)\n"
+                  << "  --max-depth <yd>     Terrain-water depth below the liquid surface (default: full)\n"
                   << "  --terrain-only       Read .map terrain/liquid directly (offline water; no WMO)\n"
                   << "  --air                Write a terrain air-heightmap tile (_air.n3t)\n"
                   << "  --air-volume         Write a volumetric air tile with WMO spans\n"
@@ -290,6 +293,12 @@ namespace
                 if (!next(value) || !ParseFloat(value, options.MaxZ))
                     return false;
                 options.HasMaxZ = true;
+            }
+            else if (arg == "--max-depth")
+            {
+                if (!next(value) || !ParseFloat(value, options.MaxDepth) || options.MaxDepth <= 0.0f)
+                    return false;
+                options.HasMaxDepth = true;
             }
             else if (arg == "--terrain-only")
             {
@@ -924,6 +933,7 @@ namespace
         std::vector<float> RawV8;
         std::array<uint16, 256> Holes{};
         bool HasHoles = false;
+        uint16 LiquidType = 0;
         float LiquidLevel = -1000.0f;
         uint8 LiquidOffX = 0;
         uint8 LiquidOffY = 0;
@@ -1061,6 +1071,7 @@ namespace
             mapData.LiquidOffY = offY;
             mapData.LiquidWidth = width;
             mapData.LiquidHeight = height;
+            mapData.LiquidType = liquidType;
             mapData.LiquidLevel = level;
             mapData.HasLiquid = true;
 
@@ -1209,7 +1220,17 @@ namespace
             return true;
         }
 
-        float const minZ = options.HasMinZ ? options.MinZ : minTerrain - cellSize;
+        if (!options.HasWaterLevel && mapData.LiquidType != 0 &&
+            !IsWaterLiquid(mapData.LiquidType))
+        {
+            std::cout << "skip map " << options.MapId << " tile " << tileX << ":" << tileY
+                      << " (non-water liquid type " << mapData.LiquidType << ")\n";
+            return true;
+        }
+
+        float minZ = options.HasMinZ ? options.MinZ : minTerrain - cellSize;
+        if (!options.HasMinZ && options.HasMaxDepth)
+            minZ = std::max(minZ, maxLiquid - options.MaxDepth);
         float const maxZ = options.HasWaterLevel ? options.WaterLevel + cellSize : maxLiquid + cellSize;
         if (maxZ <= minZ)
         {
