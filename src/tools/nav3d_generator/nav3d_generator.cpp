@@ -393,16 +393,17 @@ namespace
         bounds.MaxZ = -std::numeric_limits<float>::max();
         bool any = false;
 
+        // TerrainBuilder::copyVertices stores vertices as (world y, world z, world x).
         auto const include = [&bounds, &any](G3D::Array<float> const& verts)
         {
             for (int i = 0; i + 2 < verts.size(); i += 3)
             {
-                bounds.MinX = std::min(bounds.MinX, verts[i]);
-                bounds.MinY = std::min(bounds.MinY, verts[i + 1]);
-                bounds.MinZ = std::min(bounds.MinZ, verts[i + 2]);
-                bounds.MaxX = std::max(bounds.MaxX, verts[i]);
-                bounds.MaxY = std::max(bounds.MaxY, verts[i + 1]);
-                bounds.MaxZ = std::max(bounds.MaxZ, verts[i + 2]);
+                bounds.MinX = std::min(bounds.MinX, verts[i + 2]);
+                bounds.MinY = std::min(bounds.MinY, verts[i]);
+                bounds.MinZ = std::min(bounds.MinZ, verts[i + 1]);
+                bounds.MaxX = std::max(bounds.MaxX, verts[i + 2]);
+                bounds.MaxY = std::max(bounds.MaxY, verts[i]);
+                bounds.MaxZ = std::max(bounds.MaxZ, verts[i + 1]);
                 any = true;
             }
         };
@@ -410,6 +411,20 @@ namespace
         include(mesh.solidVerts);
         include(mesh.liquidVerts);
         return any;
+    }
+
+    // Non-tiled maps keep their single global WMO in the .vmtree GOBJ chunk. Loading it
+    // once per grid cell would duplicate the whole model nine times in the 3x3 loop.
+    bool VMapIsTiled(std::string const& dataDir, uint32 mapId)
+    {
+        std::filesystem::path const path = std::filesystem::path(dataDir) / "vmaps" /
+            Acore::StringFormat("{:03}.vmtree", mapId);
+        std::ifstream in(path, std::ios::binary);
+        char magic[8]{};
+        char tiled = 1;
+        if (!in.read(magic, sizeof(magic)) || !in.read(&tiled, 1))
+            return true;
+        return tiled != 0;
     }
 
     float LiquidTop(rcHeightfield const* liquid, int column, float bminZ, float cellSize)
@@ -450,10 +465,13 @@ namespace
             meshData.liquidVerts[i] -= MMAP::GRID_SIZE;
             meshData.liquidVerts[i + 2] += MMAP::GRID_SIZE;
         }
+        bool const vmapTiled = VMapIsTiled(options.DataDir, options.MapId);
         for (int offsetX = -1; offsetX <= 1; ++offsetX)
         {
             for (int offsetY = -1; offsetY <= 1; ++offsetY)
             {
+                if (!vmapTiled && (offsetX != 0 || offsetY != 0))
+                    continue;
                 int const wmoX = int(tileX) + offsetX;
                 int const wmoY = int(tileY) + offsetY;
                 if (wmoX < 0 || wmoY < 0 || wmoX >= 64 || wmoY >= 64)
@@ -487,8 +505,8 @@ namespace
         float const recastMaxX = recastMinX + float(width) * cellSize;
         float const recastMaxZ = recastMinZ + float(height) * cellSize;
 
-        float const minZ = options.HasMinZ ? options.MinZ : meshBounds.MinY - cellSize;
-        float const globalTop = options.HasWaterLevel ? options.WaterLevel : meshBounds.MaxY + cellSize;
+        float const minZ = options.HasMinZ ? options.MinZ : meshBounds.MinZ - cellSize;
+        float const globalTop = options.HasWaterLevel ? options.WaterLevel : meshBounds.MaxZ + cellSize;
         int const sizeZ = std::max(1, int(std::ceil((globalTop - minZ) / cellSize)));
         if (sizeZ > 32767)
         {
@@ -503,8 +521,10 @@ namespace
             return false;
         }
 
-        float bmin[3] = {recastMinX, minZ, recastMinZ};
-        float bmax[3] = {recastMaxX, minZ + float(sizeZ) * cellSize, recastMaxZ};
+        // TerrainBuilder::copyVertices writes Recast vertices as (world y, world z,
+        // world x); the Recast bounds must use the same axis order.
+        float bmin[3] = {recastMinZ, minZ, recastMinX};
+        float bmax[3] = {recastMaxZ, minZ + float(sizeZ) * cellSize, recastMaxX};
 
         rcContext context;
         rcHeightfield* solid = rcAllocHeightfield();
@@ -555,8 +575,6 @@ namespace
             {
                 int const column = y * width + x;
                 rcSpan const* first = solid->spans[column];
-                if (!first)
-                    continue;
 
                 float const localTop = LiquidTop(liquid, column, bmin[1], cellSize);
                 float const waterTop = options.HasWaterLevel ? options.WaterLevel : localTop;
@@ -569,7 +587,8 @@ namespace
                 // Water is the complement of solid spans up to the water surface. Below the
                 // lowest solid span (seabed/hull bottom) is solid/void, not water.
                 std::vector<uint8> solidMask(sizeZ, 0);
-                for (int z = 0; z < std::min(int(first->smin), sizeZ); ++z)
+                int const firstSolid = first ? int(first->smin) : sizeZ;
+                for (int z = 0; z < std::min(firstSolid, sizeZ); ++z)
                     solidMask[z] = 1;
                 for (rcSpan const* span = first; span; span = span->next)
                 {
@@ -2207,7 +2226,10 @@ namespace
         std::cout << "probe map " << options.MapId << " point=(" << options.ProbeX << ","
                   << options.ProbeY << "," << options.ProbeZ << ") base=" << basePath << "\n";
 
-        std::pair<uint32, uint32> const orders[] = {{18, 32}, {32, 18}, {18, 33}, {33, 18}};
+        int const probeTileX = std::clamp(int(std::floor(32.0f - options.ProbeX / 533.3333f)), 0, 63);
+        int const probeTileY = std::clamp(int(std::floor(32.0f - options.ProbeY / 533.3333f)), 0, 63);
+        std::array<std::pair<uint32, uint32>, 5> const orders = {
+            {{18, 32}, {32, 18}, {18, 33}, {33, 18}, {uint32(probeTileX), uint32(probeTileY)}}};
         for (auto const& order : orders)
         {
             VMAP::StaticMapTree tree(options.MapId, basePath);
@@ -2234,6 +2256,39 @@ namespace
                           << models[i].iBound.low().y << "," << models[i].iBound.low().z << ")-("
                           << models[i].iBound.high().x << "," << models[i].iBound.high().y << ","
                           << models[i].iBound.high().z << ")\n";
+            }
+
+            // Probe WMO liquid groups (WmoLiquid) for WMO models in the tile.
+            for (uint32_t i = 0; i < count; ++i)
+            {
+                std::string lower = models[i].name;
+                std::transform(lower.begin(), lower.end(), lower.begin(),
+                               [](unsigned char c) { return char(std::tolower(c)); });
+                if (lower.find(".wmo") == std::string::npos)
+                    continue;
+                VMAP::WorldModel* worldModel = models[i].getWorldModel();
+                if (!worldModel)
+                    continue;
+                std::vector<VMAP::GroupModel> groups;
+                worldModel->GetGroupModels(groups);
+                std::cout << "  liquid model " << models[i].name << " groups=" << groups.size() << "\n";
+                for (size_t gi = 0; gi < groups.size(); ++gi)
+                {
+                    std::vector<G3D::Vector3> verts;
+                    std::vector<VMAP::MeshTriangle> tris;
+                    VMAP::WmoLiquid* liquid = nullptr;
+                    groups[gi].GetMeshData(verts, tris, liquid);
+                    if (!liquid)
+                        continue;
+                    uint32 tilesX = 0;
+                    uint32 tilesY = 0;
+                    G3D::Vector3 corner;
+                    liquid->GetPosInfo(tilesX, tilesY, corner);
+                    std::cout << "    group " << gi << " liquid type=" << liquid->GetType()
+                              << " flags=" << (liquid->GetFlagsStorage() ? "yes" : "null")
+                              << " tiles=" << tilesX << "x" << tilesY << " corner=(" << corner.x << ","
+                              << corner.y << "," << corner.z << ")\n";
+                }
             }
 
             struct Candidate
