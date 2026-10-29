@@ -78,6 +78,8 @@ namespace
         float WaterLevel = 0.0f;
         bool HasMinZ = false;
         float MinZ = 0.0f;
+        bool HasMaxZ = false;
+        float MaxZ = 0.0f;
         bool TerrainOnly = false;
         bool Air = false;
         bool AirVolume = false;
@@ -115,6 +117,7 @@ namespace
                   << "  --radius <yd>        Radius around the center (default: 0)\n"
                   << "  --water-level <z>    Fill water up to this Z (default: local liquid surface)\n"
                   << "  --min-z <z>          Lowest Z included in the tile (default: mesh min)\n"
+                  << "  --max-z <z>          Highest Z included in the tile (default: mesh max)\n"
                   << "  --terrain-only       Read .map terrain/liquid directly (offline water; no WMO)\n"
                   << "  --air                Write a terrain air-heightmap tile (_air.n3t)\n"
                   << "  --air-volume         Write a volumetric air tile with WMO spans\n"
@@ -282,6 +285,12 @@ namespace
                     return false;
                 options.HasMinZ = true;
             }
+            else if (arg == "--max-z")
+            {
+                if (!next(value) || !ParseFloat(value, options.MaxZ))
+                    return false;
+                options.HasMaxZ = true;
+            }
             else if (arg == "--terrain-only")
             {
                 options.TerrainOnly = true;
@@ -445,6 +454,38 @@ namespace
         return false;
     }
 
+    // Terrain .map entries carry MAP_LIQUID_TYPE_* with bit 31 set. WMO entries
+    // carry the LiquidType.dbc id; only water/ocean ids are swimmable.
+    bool IsWaterLiquid(uint32 rawType)
+    {
+        if (rawType & 0x80000000u)
+        {
+            uint32 const flags = rawType & 0x7fffffffu;
+            return (flags & (0x01u | 0x02u)) != 0 && (flags & 0x10u) == 0;
+        }
+
+        switch (rawType)
+        {
+            case 1:   // Water
+            case 2:   // Ocean
+            case 5:   // Slow Water
+            case 6:   // Slow Ocean
+            case 9:   // Fast Water
+            case 10:  // Fast Ocean
+            case 13:  // WMO Water
+            case 14:  // WMO Ocean
+            case 17:  // WMO Water - Interior
+            case 41:  // Coilfang Raid - Water
+            case 61:  // Hyjal Past - Water
+            case 81:  // Lake Wintergrasp - Water
+            case 100: // Basic Procedural Water
+            case 181: // Orange Slime (water movement type)
+                return true;
+            default:
+                return false;
+        }
+    }
+
     bool GenerateTile(Options const& options, uint32 tileX, uint32 tileY)
     {
         MMAP::TerrainBuilder terrainBuilder(options.DataDir, false);
@@ -482,9 +523,25 @@ namespace
         MMAP::TerrainBuilder::cleanVertices(meshData.solidVerts, meshData.solidTris);
         MMAP::TerrainBuilder::cleanVertices(meshData.liquidVerts, meshData.liquidTris);
 
+        // TerrainBuilder also emits magma and slime surfaces. Only water is swimmable;
+        // keep the water triangles and leave the other liquid types out of the volume.
+        G3D::Array<int> waterLiquidTris;
+        for (size_t i = 0; i + 2 < meshData.liquidTris.size(); i += 3)
+        {
+            size_t const triangle = i / 3;
+            bool const isWater =
+                triangle < meshData.liquidTypeRaw.size()
+                    ? IsWaterLiquid(meshData.liquidTypeRaw[triangle])
+                    : (triangle < meshData.liquidType.size() &&
+                       meshData.liquidType[triangle] == NAV_WATER);
+            if (!isWater)
+                continue;
+            waterLiquidTris.append(meshData.liquidTris[i], meshData.liquidTris[i + 1],
+                                   meshData.liquidTris[i + 2]);
+        }
+
         if (meshData.solidVerts.size() == 0 || meshData.solidTris.size() == 0 ||
-            (!options.HasWaterLevel && !options.HasMinZ &&
-             (meshData.liquidVerts.size() == 0 || meshData.liquidTris.size() == 0)))
+            (!options.HasWaterLevel && waterLiquidTris.size() == 0))
         {
             std::cout << "skip map " << options.MapId << " tile " << tileX << ":" << tileY
                       << " (no usable solid/liquid mesh)\n";
@@ -506,7 +563,9 @@ namespace
         float const recastMaxZ = recastMinZ + float(height) * cellSize;
 
         float const minZ = options.HasMinZ ? options.MinZ : meshBounds.MinZ - cellSize;
-        float const globalTop = options.HasWaterLevel ? options.WaterLevel : meshBounds.MaxZ + cellSize;
+        float const globalTop = options.HasWaterLevel
+                                    ? options.WaterLevel
+                                    : (options.HasMaxZ ? options.MaxZ : meshBounds.MaxZ + cellSize);
         int const sizeZ = std::max(1, int(std::ceil((globalTop - minZ) / cellSize)));
         if (sizeZ > 32767)
         {
@@ -545,14 +604,14 @@ namespace
         }
 
         int const solidTriangles = meshData.solidTris.size() / 3;
-        int const liquidTriangles = meshData.liquidTris.size() / 3;
+        int const liquidTriangles = waterLiquidTris.size() / 3;
         std::vector<unsigned char> solidAreas(solidTriangles, RC_WALKABLE_AREA);
         std::vector<unsigned char> liquidAreas(liquidTriangles, RC_WALKABLE_AREA);
 
         if (!rcRasterizeTriangles(&context, meshData.solidVerts.getCArray(), meshData.solidVerts.size() / 3,
                                   meshData.solidTris.getCArray(), solidAreas.data(), solidTriangles, *solid) ||
             !rcRasterizeTriangles(&context, meshData.liquidVerts.getCArray(), meshData.liquidVerts.size() / 3,
-                                  meshData.liquidTris.getCArray(), liquidAreas.data(), liquidTriangles, *liquid))
+                                  waterLiquidTris.getCArray(), liquidAreas.data(), liquidTriangles, *liquid))
         {
             rcFreeHeightField(solid);
             rcFreeHeightField(liquid);

@@ -64,6 +64,9 @@ namespace MMAP
         G3D::Array<float> liquidVerts;
         G3D::Array<int> liquidTris;
         G3D::Array<uint8> liquidType;
+        // Raw LiquidType source for each liquid triangle. Terrain entries carry the
+        // MAP_LIQUID_TYPE_* flag with bit 31 set; WMO entries carry the LiquidType.dbc id.
+        G3D::Array<uint32> liquidTypeRaw;
 
         // offmesh connection data
         G3D::Array<float> offMeshConnections;   // [p0y,p0z,p0x,p1y,p1z,p1x] - per connection

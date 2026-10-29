@@ -415,6 +415,7 @@ namespace MMAP
                 useTerrain = true;
                 useLiquid = true;
                 uint8 liquidType = MAP_LIQUID_TYPE_NO_WATER;
+                uint32 liquidTypeRaw = MAP_LIQUID_TYPE_NO_WATER;
                 // FIXME: "warning: the address of ‘liquid_type’ will always evaluate as ‘true’"
 
                 // if there is no liquid, don't use liquid
@@ -425,6 +426,7 @@ namespace MMAP
                 else
                 {
                     liquidType = getLiquidType(i, liquid_flags);
+                    liquidTypeRaw = liquidType;
                     switch (liquidType)
                     {
                         default:
@@ -530,6 +532,7 @@ namespace MMAP
                 if (useLiquid)
                 {
                     meshData.liquidType.append(liquidType);
+                    meshData.liquidTypeRaw.append(liquidTypeRaw | 0x80000000u);
                     for (int k = 0; k < 3; ++k)
                         meshData.liquidTris.append(ltris[k]);
                 }
@@ -819,6 +822,7 @@ namespace MMAP
                         {
                             meshData.liquidTris.append(liqTris[j * 3 + 1] + liqOffset, liqTris[j * 3 + 2] + liqOffset, liqTris[j * 3] + liqOffset);
                             meshData.liquidType.append(type);
+                            meshData.liquidTypeRaw.append(liquid->GetType());
                         }
                     }
                 }
