@@ -1197,10 +1197,32 @@ namespace
         }
 
         float const cellSize = options.CellSize;
-        float const originX = (32.0f - float(tileX)) * MMAP::GRID_SIZE - MMAP::GRID_SIZE;
-        float const originY = (32.0f - float(tileY)) * MMAP::GRID_SIZE - MMAP::GRID_SIZE;
-        int const width = int(std::ceil(MMAP::GRID_SIZE / cellSize));
-        int const height = int(std::ceil(MMAP::GRID_SIZE / cellSize));
+        float const tileOriginX = (32.0f - float(tileX)) * MMAP::GRID_SIZE - MMAP::GRID_SIZE;
+        float const tileOriginY = (32.0f - float(tileY)) * MMAP::GRID_SIZE - MMAP::GRID_SIZE;
+        float const tileMaxX = tileOriginX + MMAP::GRID_SIZE;
+        float const tileMaxY = tileOriginY + MMAP::GRID_SIZE;
+        float originX = tileOriginX;
+        float originY = tileOriginY;
+        int width = int(std::ceil(MMAP::GRID_SIZE / cellSize));
+        int height = int(std::ceil(MMAP::GRID_SIZE / cellSize));
+
+        if (options.HasBox)
+        {
+            float const boxMinX = std::clamp(options.BoxMinX, tileOriginX, tileMaxX);
+            float const boxMaxX = std::clamp(options.BoxMaxX, tileOriginX, tileMaxX);
+            float const boxMinY = std::clamp(options.BoxMinY, tileOriginY, tileMaxY);
+            float const boxMaxY = std::clamp(options.BoxMaxY, tileOriginY, tileMaxY);
+            if (boxMaxX <= boxMinX || boxMaxY <= boxMinY)
+            {
+                std::cout << "skip map " << options.MapId << " tile " << tileX << ":" << tileY
+                          << " (empty box)\n";
+                return true;
+            }
+            originX = tileOriginX + std::floor((boxMinX - tileOriginX) / cellSize) * cellSize;
+            originY = tileOriginY + std::floor((boxMinY - tileOriginY) / cellSize) * cellSize;
+            width = std::max(1, int(std::ceil((boxMaxX - originX) / cellSize)));
+            height = std::max(1, int(std::ceil((boxMaxY - originY) / cellSize)));
+        }
 
         float minTerrain = std::numeric_limits<float>::max();
         for (float heightValue : mapData.V9)
