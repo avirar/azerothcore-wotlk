@@ -87,6 +87,8 @@ namespace
         float ProbeZ = 0.0f;
         bool AirTreeDetail = false;
         bool AirDetailDiag = false;
+        bool SkipExisting = false;
+        std::string ManifestPath;
         bool HasBox = false;
         float BoxMinX = 0.0f;
         float BoxMaxX = 0.0f;
@@ -121,6 +123,8 @@ namespace
                   << "  --box minX maxX minY maxY minZ maxZ\n"
                   << "  --seed x y z         Flood-fill seed for --air-tree-detail; repeatable\n"
                   << "  --air-detail-diag   Print per-gate classification for every --seed, then exit\n"
+                  << "  --skip-existing      Skip a tile whose output file already exists\n"
+                  << "  --manifest <path>    Append per-tile results (map tileX tileY status)\n"
                   << "  --jobs <n>           Parallel classification workers (default 1)\n";
     }
 
@@ -306,6 +310,15 @@ namespace
             else if (arg == "--air-detail-diag")
             {
                 options.AirDetailDiag = true;
+            }
+            else if (arg == "--skip-existing")
+            {
+                options.SkipExisting = true;
+            }
+            else if (arg == "--manifest")
+            {
+                if (!next(options.ManifestPath))
+                    return false;
             }
             else if (arg == "--box")
             {
@@ -1638,94 +1651,70 @@ namespace
                         ? std::clamp(int(std::floor((terrain - minZ) / cellSize)), 0, sizeZ - 1)
                         : -1;
 
-                std::vector<std::pair<int, int>> spans;
-                int lowestWmo = sizeZ;
+                struct SolidSpan
+                {
+                    int Lo;
+                    int Hi;
+                    bool Wmo;
+                };
+                std::vector<SolidSpan> spans;
                 for (rcSpan const* span = solid->spans[y * width + x]; span; span = span->next)
                 {
                     int const lo = std::max(0, int(span->smin));
                     int const hi = std::min(sizeZ, int(span->smax));
                     if (lo < hi)
-                    {
-                        spans.emplace_back(lo, hi);
-                        if (floorCell >= 0 && lo < floorCell)
-                            lowestWmo = std::min(lowestWmo, lo);
-                    }
+                        spans.push_back({lo, hi, true});
                 }
                 if (floorCell >= 0)
-                {
-                    if (lowestWmo < sizeZ)
-                    {
-                        // A WMO volume sits below the terrain surface (cave, tunnel, or
-                        // interior). Do not fill the whole column with terrain: seal only
-                        // below the lowest WMO floor and add a thin terrain lid. The air
-                        // between the WMO floor and ceiling stays navigable.
-                        if (lowestWmo > 0)
-                            spans.emplace_back(0, lowestWmo);
-                        spans.emplace_back(floorCell, floorCell + 1);
-                    }
-                    else
-                    {
-                        spans.emplace_back(0, floorCell + 1);
-                    }
-                }
-                if (spans.empty())
-                    spans.emplace_back(0, 0);
+                    spans.push_back({floorCell, floorCell + 1, false});
 
-                std::sort(spans.begin(), spans.end());
-                std::vector<std::pair<int, int>> merged;
-                for (auto const& span : spans)
+                std::sort(spans.begin(), spans.end(),
+                          [](SolidSpan const& left, SolidSpan const& right)
+                          { return left.Lo < right.Lo; });
+                std::vector<SolidSpan> merged;
+                for (SolidSpan const& span : spans)
                 {
-                    if (merged.empty() || span.first > merged.back().second)
+                    if (merged.empty() || span.Lo > merged.back().Hi)
                         merged.push_back(span);
-                    else
-                        merged.back().second = std::max(merged.back().second, span.second);
+                    else if (span.Hi > merged.back().Hi)
+                    {
+                        merged.back().Hi = span.Hi;
+                        merged.back().Wmo = span.Wmo;
+                    }
                 }
 
                 Nav3DTileColumn& column = tile.Columns()[size_t(y) * size_t(width) + size_t(x)];
                 int cursor = 0;
+                bool first = true;
                 bool any = false;
-                for (auto const& solidSpan : merged)
+                int const bodyPad = int(std::ceil(kBodyHalfHeight / cellSize));
+                auto const emitAir = [&](int lo, int hi)
                 {
-                    if (solidSpan.first > cursor)
-                    {
-                        int const lo = cursor + int(std::ceil(kBodyHalfHeight / cellSize));
-                        int const hi = solidSpan.first - 1;
-                        if (lo <= hi && hi - lo >= 0)
-                        {
-                            Nav3DTileInterval interval;
-                            interval.ZMin = int16(lo);
-                            interval.ZMax = int16(hi);
-                            interval.Clearance = 16;
-                            interval.Flags = 0;
-                            if (column.IntervalCount == 0)
-                                column.IntervalOffset = uint32(tile.Intervals().size());
-                            column.IntervalCount = uint16(column.IntervalCount + 1);
-                            tile.Intervals().push_back(interval);
-                            ++airIntervals;
-                            any = true;
-                        }
-                    }
-                    cursor = std::max(cursor, solidSpan.second);
+                    if (lo > hi)
+                        return;
+                    Nav3DTileInterval interval;
+                    interval.ZMin = int16(lo);
+                    interval.ZMax = int16(hi);
+                    interval.Clearance = 16;
+                    interval.Flags = 0;
+                    if (column.IntervalCount == 0)
+                        column.IntervalOffset = uint32(tile.Intervals().size());
+                    column.IntervalCount = uint16(column.IntervalCount + 1);
+                    tile.Intervals().push_back(interval);
+                    ++airIntervals;
+                    any = true;
+                };
+                for (SolidSpan const& solidSpan : merged)
+                {
+                    // Only gaps bounded above by a WMO ceiling are cavities. The gap
+                    // between a WMO ceiling and the terrain lid is rock, not air.
+                    if (!first && solidSpan.Lo > cursor && solidSpan.Wmo)
+                        emitAir(cursor + bodyPad, solidSpan.Lo - 1);
+                    cursor = std::max(cursor, solidSpan.Hi);
+                    first = false;
                 }
                 if (cursor < sizeZ)
-                {
-                    int const lo = cursor;
-                    int const hi = sizeZ - 1;
-                    if (lo <= hi)
-                    {
-                        Nav3DTileInterval interval;
-                        interval.ZMin = int16(lo);
-                        interval.ZMax = int16(hi);
-                        interval.Clearance = 16;
-                        interval.Flags = 0;
-                        if (column.IntervalCount == 0)
-                            column.IntervalOffset = uint32(tile.Intervals().size());
-                        column.IntervalCount = uint16(column.IntervalCount + 1);
-                        tile.Intervals().push_back(interval);
-                        ++airIntervals;
-                        any = true;
-                    }
-                }
+                    emitAir(cursor + bodyPad, sizeZ - 1);
                 if (any)
                     ++airColumns;
             }
@@ -2276,6 +2265,16 @@ namespace
         return true;
     }
 
+    // Keep this in sync with the output paths in the generators above.
+    std::string RelativeOutputPath(Options const& options, uint32 tileX, uint32 tileY)
+    {
+        if (options.AirTreeDetail)
+            return Acore::StringFormat("map{:04}/{:02}_{:02}_airdetail.n3t", options.MapId, tileX,
+                                       tileY);
+        if (options.AirVolume || options.Air)
+            return Acore::StringFormat("map{:04}/{}_{}_air.n3t", options.MapId, tileX, tileY);
+        return Acore::StringFormat("map{:04}/{}_{}_water.n3t", options.MapId, tileX, tileY);
+    }
 }
 
 int main(int argc, char** argv)
@@ -2325,11 +2324,42 @@ int main(int argc, char** argv)
     std::cout << "nav3d_generator cell " << options.CellSize << " tiles " << requests.size()
               << " output " << options.OutputDir << "\n";
 
+    std::ofstream manifest;
+    if (!options.ManifestPath.empty())
+    {
+        manifest.open(options.ManifestPath, std::ios::app);
+        if (!manifest)
+        {
+            std::cerr << "cannot open manifest " << options.ManifestPath << "\n";
+            return 1;
+        }
+        manifest << "# map tileX tileY status\n";
+        manifest.flush();
+    }
+
     size_t failed = 0;
     for (TileRequest const& request : requests)
     {
         Options tileOptions = options;
         tileOptions.MapId = request.MapId;
+        std::filesystem::path const expected =
+            std::filesystem::path(tileOptions.OutputDir) /
+            RelativeOutputPath(tileOptions, request.TileX, request.TileY);
+        if (tileOptions.SkipExisting)
+        {
+            std::error_code existsEc;
+            if (std::filesystem::exists(expected, existsEc))
+            {
+                std::cout << "skip existing " << expected << "\n";
+                if (manifest)
+                {
+                    manifest << request.MapId << ' ' << request.TileX << ' ' << request.TileY
+                             << " skipped\n";
+                    manifest.flush();
+                }
+                continue;
+            }
+        }
         bool const generated = tileOptions.AirVolume
                                    ? GenerateAirVolumeTile(tileOptions, request.TileX, request.TileY)
                                    : tileOptions.Air
@@ -2338,6 +2368,12 @@ int main(int argc, char** argv)
                                                ? GenerateTerrainWaterTile(tileOptions, request.TileX,
                                                                           request.TileY)
                                                : GenerateTile(tileOptions, request.TileX, request.TileY);
+        if (manifest)
+        {
+            manifest << request.MapId << ' ' << request.TileX << ' ' << request.TileY << ' '
+                     << (generated ? "ok" : "failed") << '\n';
+            manifest.flush();
+        }
         if (!generated)
         {
             std::cerr << "failed map " << request.MapId << " tile " << request.TileX << ":" << request.TileY
