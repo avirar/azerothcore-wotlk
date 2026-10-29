@@ -14,7 +14,14 @@
  */
 
 #include "Nav3DTile.h"
+#include "MapTree.h"
+#include "MapDefines.h"
+#include "DetourNavMesh.h"
+#include "DetourNavMeshQuery.h"
+#include "DetourCommon.h"
+#include "ModelInstance.h"
 #include "StringFormat.h"
+#include "VMapMgr2.h"
 #include "mmaps_generator/TerrainBuilder.h"
 
 #include "Recast.h"
@@ -26,6 +33,9 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
+#include <thread>
+#include <atomic>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -71,6 +81,21 @@ namespace
         bool TerrainOnly = false;
         bool Air = false;
         bool AirVolume = false;
+        bool Probe = false;
+        float ProbeX = 0.0f;
+        float ProbeY = 0.0f;
+        float ProbeZ = 0.0f;
+        bool AirTreeDetail = false;
+        bool AirDetailDiag = false;
+        bool HasBox = false;
+        float BoxMinX = 0.0f;
+        float BoxMaxX = 0.0f;
+        float BoxMinY = 0.0f;
+        float BoxMaxY = 0.0f;
+        float BoxMinZ = 0.0f;
+        float BoxMaxZ = 0.0f;
+        std::vector<std::array<float, 3>> Seeds;
+        uint32 Jobs = 1;
         std::set<std::pair<uint32, uint32>> Tiles;
         std::vector<TileRequest> Requests;
     };
@@ -90,7 +115,13 @@ namespace
                   << "  --min-z <z>          Lowest Z included in the tile (default: mesh min)\n"
                   << "  --terrain-only       Read .map terrain/liquid directly (offline water; no WMO)\n"
                   << "  --air                Write a terrain air-heightmap tile (_air.n3t)\n"
-                  << "  --air-volume         Write a volumetric air tile with WMO spans\n";
+                  << "  --air-volume         Write a volumetric air tile with WMO spans\n"
+                  << "  --probe <x> <y> <z>  Dump VMAP model/height probes at a world point\n"
+                  << "  --air-tree-detail    Bake a 1-yd air detail box from StaticMapTree + .map\n"
+                  << "  --box minX maxX minY maxY minZ maxZ\n"
+                  << "  --seed x y z         Flood-fill seed for --air-tree-detail; repeatable\n"
+                  << "  --air-detail-diag   Print per-gate classification for every --seed, then exit\n"
+                  << "  --jobs <n>           Parallel classification workers (default 1)\n";
     }
 
     bool ParseFloat(std::string const& text, float& value)
@@ -259,6 +290,52 @@ namespace
             {
                 options.AirVolume = true;
             }
+            else if (arg == "--probe")
+            {
+                options.Probe = true;
+                if (i + 3 >= argc || !ParseFloat(argv[i + 1], options.ProbeX) ||
+                    !ParseFloat(argv[i + 2], options.ProbeY) ||
+                    !ParseFloat(argv[i + 3], options.ProbeZ))
+                    return false;
+                i += 3;
+            }
+            else if (arg == "--air-tree-detail")
+            {
+                options.AirTreeDetail = true;
+            }
+            else if (arg == "--air-detail-diag")
+            {
+                options.AirDetailDiag = true;
+            }
+            else if (arg == "--box")
+            {
+                if (i + 6 >= argc || !ParseFloat(argv[i + 1], options.BoxMinX) ||
+                    !ParseFloat(argv[i + 2], options.BoxMaxX) ||
+                    !ParseFloat(argv[i + 3], options.BoxMinY) ||
+                    !ParseFloat(argv[i + 4], options.BoxMaxY) ||
+                    !ParseFloat(argv[i + 5], options.BoxMinZ) ||
+                    !ParseFloat(argv[i + 6], options.BoxMaxZ))
+                    return false;
+                options.HasBox = true;
+                i += 6;
+            }
+            else if (arg == "--seed")
+            {
+                std::array<float, 3> seed{};
+                if (i + 3 >= argc || !ParseFloat(argv[i + 1], seed[0]) ||
+                    !ParseFloat(argv[i + 2], seed[1]) ||
+                    !ParseFloat(argv[i + 3], seed[2]))
+                    return false;
+                options.Seeds.push_back(seed);
+                i += 3;
+            }
+            else if (arg == "--jobs")
+            {
+                uint32 jobs = 1;
+                if (!next(value) || !ParseUInt(value, jobs) || jobs == 0)
+                    return false;
+                options.Jobs = jobs;
+            }
             else if (arg == "--help" || arg == "-h")
             {
                 PrintUsage(argv[0]);
@@ -368,7 +445,7 @@ namespace
                 int const wmoY = int(tileY) + offsetY;
                 if (wmoX < 0 || wmoY < 0 || wmoX >= 64 || wmoY >= 64)
                     continue;
-                terrainBuilder.loadVMap(options.MapId, uint32(wmoY), uint32(wmoX), meshData);
+                terrainBuilder.loadVMap(options.MapId, uint32(wmoX), uint32(wmoY), meshData);
             }
         }
         MMAP::TerrainBuilder::cleanVertices(meshData.solidVerts, meshData.solidTris);
@@ -752,6 +829,8 @@ namespace
         float HeightMultiplier = 0.0f;
         std::vector<float> V9;
         std::vector<float> V8;
+        std::vector<float> RawV9;
+        std::vector<float> RawV8;
         std::array<uint16, 256> Holes{};
         bool HasHoles = false;
         float LiquidLevel = -1000.0f;
@@ -803,10 +882,18 @@ namespace
                     mapData.HeightMultiplier = (gridMaxHeight - gridHeight) / 65535.0f;
                     mapData.V9.resize(v9.size());
                     mapData.V8.resize(v8.size());
+                    mapData.RawV9.resize(v9.size());
+                    mapData.RawV8.resize(v8.size());
                     for (size_t i = 0; i < v9.size(); ++i)
+                    {
+                        mapData.RawV9[i] = float(v9[i]);
                         mapData.V9[i] = float(v9[i]) * mapData.HeightMultiplier + gridHeight;
+                    }
                     for (size_t i = 0; i < v8.size(); ++i)
+                    {
+                        mapData.RawV8[i] = float(v8[i]);
                         mapData.V8[i] = float(v8[i]) * mapData.HeightMultiplier + gridHeight;
+                    }
                 }
                 else if (flags & 0x0004)
                 {
@@ -819,10 +906,18 @@ namespace
                     mapData.HeightMultiplier = (gridMaxHeight - gridHeight) / 255.0f;
                     mapData.V9.resize(v9.size());
                     mapData.V8.resize(v8.size());
+                    mapData.RawV9.resize(v9.size());
+                    mapData.RawV8.resize(v8.size());
                     for (size_t i = 0; i < v9.size(); ++i)
+                    {
+                        mapData.RawV9[i] = float(v9[i]);
                         mapData.V9[i] = float(v9[i]) * mapData.HeightMultiplier + gridHeight;
+                    }
                     for (size_t i = 0; i < v8.size(); ++i)
+                    {
+                        mapData.RawV8[i] = float(v8[i]);
                         mapData.V8[i] = float(v8[i]) * mapData.HeightMultiplier + gridHeight;
+                    }
                 }
                 else
                 {
@@ -833,6 +928,8 @@ namespace
                     if (!in)
                         return false;
                     mapData.HeightMultiplier = 1.0f;
+                    mapData.RawV9 = mapData.V9;
+                    mapData.RawV8 = mapData.V8;
                 }
                 mapData.HasHeight = true;
             }
@@ -927,11 +1024,11 @@ namespace
         if (IsTerrainHole(mapData, xInt, yInt))
             return -1000.0f;
 
-        float const h1 = mapData.V9[xInt * 129 + yInt];
-        float const h2 = mapData.V9[(xInt + 1) * 129 + yInt];
-        float const h3 = mapData.V9[xInt * 129 + yInt + 1];
-        float const h4 = mapData.V9[(xInt + 1) * 129 + yInt + 1];
-        float const h5 = 2.0f * mapData.V8[xInt * 128 + yInt] - mapData.GridHeight;
+        float const h1 = mapData.RawV9[xInt * 129 + yInt];
+        float const h2 = mapData.RawV9[(xInt + 1) * 129 + yInt];
+        float const h3 = mapData.RawV9[xInt * 129 + yInt + 1];
+        float const h4 = mapData.RawV9[(xInt + 1) * 129 + yInt + 1];
+        float const h5 = 2.0f * mapData.RawV8[xInt * 128 + yInt];
 
         float a = 0.0f;
         float b = 0.0f;
@@ -967,7 +1064,7 @@ namespace
             }
         }
 
-        return a * x + b * y + c;
+        return (a * x + b * y + c) * mapData.HeightMultiplier + mapData.GridHeight;
     }
 
     float TerrainLiquidLevel(TerrainMapFile const& mapData, float wx, float wy)
@@ -1404,7 +1501,6 @@ namespace
         return true;
     }
 
-
     bool GenerateAirVolumeTile(Options const& options, uint32 tileX, uint32 tileY)
     {
         TerrainMapFile mapData;
@@ -1425,10 +1521,27 @@ namespace
                 int const wmoY = int(tileY) + offsetY;
                 if (wmoX < 0 || wmoY < 0 || wmoX >= 64 || wmoY >= 64)
                     continue;
-                terrainBuilder.loadVMap(options.MapId, uint32(wmoY), uint32(wmoX), meshData);
+                terrainBuilder.loadVMap(options.MapId, uint32(wmoX), uint32(wmoY), meshData);
             }
         }
         MMAP::TerrainBuilder::cleanVertices(meshData.solidVerts, meshData.solidTris);
+
+        // TerrainBuilder writes VMAP geometry in the mmaps frame:
+        //     mmaps = iPos - 32*GRID_SIZE
+        // The server/world frame is the mirror:
+        //     server = 32*GRID_SIZE - iPos
+        // Convert before rasterizing so WMO tunnel/cave spans land on the same
+        // coordinates as the .map terrain and the runtime .n3t tiles.
+        for (int i = 0; i + 2 < meshData.solidVerts.size(); i += 3)
+        {
+            meshData.solidVerts[i] = -meshData.solidVerts[i];
+            meshData.solidVerts[i + 1] = -meshData.solidVerts[i + 1];
+        }
+        for (int i = 0; i + 2 < meshData.liquidVerts.size(); i += 3)
+        {
+            meshData.liquidVerts[i] = -meshData.liquidVerts[i];
+            meshData.liquidVerts[i + 1] = -meshData.liquidVerts[i + 1];
+        }
 
         float const cellSize = options.CellSize;
         // Align the volumetric air tiles to a world-wide lattice. A composite multi-tile
@@ -1641,6 +1754,528 @@ namespace
                   << airIntervals << " intervals, " << sizeZ << " z cells)\n";
         return true;
     }
+
+    bool GenerateAirTreeDetailTile(Options const& options)
+    {
+        if (!options.HasBox || options.Tiles.empty() || options.Seeds.empty())
+        {
+            std::cerr << "air-tree-detail requires --box, --tile and --seed\n";
+            return false;
+        }
+
+        float const cellSize = options.CellSize > 0.0f ? options.CellSize : 1.0f;
+        auto const headerTile = *options.Tiles.begin();
+        uint32 const tileX = headerTile.first;
+        uint32 const tileY = headerTile.second;
+
+        float const originX = std::floor(options.BoxMinX / cellSize) * cellSize;
+        float const originY = std::floor(options.BoxMinY / cellSize) * cellSize;
+        float const originZ = std::floor(options.BoxMinZ / cellSize) * cellSize;
+        int const width = std::max(1, int(std::ceil((options.BoxMaxX - originX) / cellSize)));
+        int const height = std::max(1, int(std::ceil((options.BoxMaxY - originY) / cellSize)));
+        int const sizeZ = std::max(1, int(std::ceil((options.BoxMaxZ - originZ) / cellSize)));
+        uint64 const cellCount = uint64(width) * uint64(height) * uint64(sizeZ);
+        if (cellCount > 256ull * 1024ull * 1024ull || sizeZ > 32767)
+        {
+            std::cerr << "air-tree-detail box too large: " << cellCount << " cells\n";
+            return false;
+        }
+
+        std::string basePath = options.DataDir;
+        if (!basePath.empty() && basePath.back() != '/')
+            basePath += '/';
+        basePath += "vmaps/";
+
+        VMAP::StaticMapTree tree(options.MapId, basePath);
+        if (!tree.InitMap(VMAP::VMapMgr2::getMapFileName(options.MapId)))
+        {
+            std::cerr << "cannot init StaticMapTree\n";
+            return false;
+        }
+        for (int ty = int(tileY) - 1; ty <= int(tileY) + 1; ++ty)
+            if (ty >= 0 && ty < 64)
+                tree.LoadMapTile(tileX, uint32(ty));
+
+        TerrainMapFile terrainLow;
+        TerrainMapFile terrainHigh;
+        bool const hasLow = tileY > 0 && LoadTerrainMap(options, tileX, tileY - 1, terrainLow);
+        bool const hasHigh = LoadTerrainMap(options, tileX, tileY, terrainHigh);
+        float const splitY = (32.0f - float(tileY)) * 533.3333f;
+
+        auto const terrainAt = [&](float x, float y) -> float
+        {
+            // tileY-1 covers [splitY, splitY + GRID); tileY covers [splitY - GRID, splitY).
+            if (y >= splitY)
+                return hasLow ? TerrainHeight(terrainLow, x, y) : -1000.0f;
+            return hasHigh ? TerrainHeight(terrainHigh, x, y) : -1000.0f;
+        };
+
+        // MMap is a diagnostic cross-check only; the solid-volume gates above use
+        // StaticMapTree directly, so a missing mmaps set must not fail the bake.
+        std::vector<float> mmapFloor(size_t(width) * size_t(height), -1e9f);
+        struct NavMeshDeleter { void operator()(dtNavMesh* mesh) const { dtFreeNavMesh(mesh); } };
+        struct QueryDeleter { void operator()(dtNavMeshQuery* query) const { dtFreeNavMeshQuery(query); } };
+        std::shared_ptr<dtNavMesh> navMesh;
+        std::shared_ptr<dtNavMeshQuery> navQuery;
+        if (options.AirDetailDiag)
+        {
+            std::string const mmapFile = Acore::StringFormat("{}/mmaps/{:03}.mmap", options.DataDir,
+                                                              options.MapId);
+            FILE* file = fopen(mmapFile.c_str(), "rb");
+            if (file)
+            {
+                dtNavMeshParams params;
+                if (fread(&params, sizeof(dtNavMeshParams), 1, file) == 1)
+                {
+                    dtNavMesh* mesh = dtAllocNavMesh();
+                    if (mesh && dtStatusSucceed(mesh->init(&params)))
+                        navMesh = std::shared_ptr<dtNavMesh>(mesh, NavMeshDeleter());
+                    else if (mesh)
+                        dtFreeNavMesh(mesh);
+                }
+                fclose(file);
+            }
+            if (navMesh)
+            {
+                for (int ty = int(tileY) - 1; ty <= int(tileY) + 1; ++ty)
+                {
+                    if (ty < 0 || ty >= 64)
+                        continue;
+                    std::string const tileFile = Acore::StringFormat("{}/mmaps/{:03}{:02}{:02}.mmtile",
+                                                                      options.DataDir, options.MapId,
+                                                                      tileX, ty);
+                    FILE* tile = fopen(tileFile.c_str(), "rb");
+                    if (!tile)
+                        continue;
+                    MmapTileHeader header;
+                    if (fread(&header, sizeof(MmapTileHeader), 1, tile) == 1 &&
+                        header.mmapMagic == MMAP_MAGIC && header.mmapVersion == MMAP_VERSION)
+                    {
+                        unsigned char* data = (unsigned char*)dtAlloc(header.size, DT_ALLOC_PERM);
+                        if (data && fread(data, header.size, 1, tile) == 1)
+                        {
+                            dtTileRef ref = 0;
+                            if (dtStatusFailed(navMesh->addTile(data, header.size, DT_TILE_FREE_DATA, 0,
+                                                               &ref)))
+                                dtFree(data);
+                        }
+                        else if (data)
+                            dtFree(data);
+                    }
+                    fclose(tile);
+                }
+                dtNavMeshQuery* query = dtAllocNavMeshQuery();
+                if (query && dtStatusSucceed(query->init(navMesh.get(), 1024)))
+                    navQuery = std::shared_ptr<dtNavMeshQuery>(query, QueryDeleter());
+                else if (query)
+                    dtFreeNavMeshQuery(query);
+            }
+        }
+        if (navQuery)
+        {
+            dtQueryFilter navFilter;
+            navFilter.setIncludeFlags(0xFFFF);
+            for (int y = 0; y < height; ++y)
+            {
+            for (int x = 0; x < width; ++x)
+            {
+                float const wx = originX + (float(x) + 0.5f) * cellSize;
+                float const wy = originY + (float(y) + 0.5f) * cellSize;
+                float const pt[3] = {wy, originZ + 1.0f, wx};
+                float const extents[3] = {2.0f, 2000.0f, 2.0f};
+                dtPolyRef ref = 0;
+                float closest[3];
+                    if (dtStatusSucceed(navQuery->findNearestPoly(pt, extents, &navFilter, &ref, closest)) &&
+                        ref)
+                    {
+                        float height = 0.0f;
+                        if (dtStatusSucceed(navQuery->getPolyHeight(ref, closest, &height)))
+                            mmapFloor[size_t(y) * size_t(width) + size_t(x)] = height;
+                    }
+                }
+            }
+        }
+
+        auto const mirror = [](float x, float y, float z) -> G3D::Vector3
+        {
+            return G3D::Vector3(17066.0f - x, 17066.0f - y, z);
+        };
+
+        constexpr float bodyRadius = 0.45f;
+        constexpr float bodyDiagonal = 0.6364f;
+        constexpr float bodyHalfHeight = 0.8f;
+        struct Ray
+        {
+            float X;
+            float Y;
+            float Z;
+            float Distance;
+        };
+        static constexpr Ray rays[10] = {
+            {1.0f, 0.0f, 0.0f, bodyRadius},         {-1.0f, 0.0f, 0.0f, bodyRadius},
+            {0.0f, 1.0f, 0.0f, bodyRadius},         {0.0f, -1.0f, 0.0f, bodyRadius},
+            {0.7071f, 0.7071f, 0.0f, bodyDiagonal}, {-0.7071f, 0.7071f, 0.0f, bodyDiagonal},
+            {0.7071f, -0.7071f, 0.0f, bodyDiagonal}, {-0.7071f, -0.7071f, 0.0f, bodyDiagonal},
+            {0.0f, 0.0f, 1.0f, bodyHalfHeight},     {0.0f, 0.0f, -1.0f, bodyHalfHeight}};
+
+        auto const airAt = [&](float x, float y, float z) -> bool
+        {
+            G3D::Vector3 const point = mirror(x, y, z);
+            VMAP::LocationInfo info;
+            bool const hasWmo = tree.GetLocationInfo(point, info);
+            float const wmoFloor = tree.getHeight(point, 5000.0f);
+            float const terrain = terrainAt(x, y);
+            bool const belowTerrain = terrain > -1000.0f && z < terrain - 1.0f;
+            int const ix = std::clamp(int((x - originX) / cellSize), 0, width - 1);
+            int const iy = std::clamp(int((y - originY) / cellSize), 0, height - 1);
+            float const floor = mmapFloor[size_t(iy) * size_t(width) + size_t(ix)];
+            float const columnTop = belowTerrain && std::isfinite(terrain)
+                                        ? tree.getHeight(mirror(x, y, terrain), 5000.0f)
+                                        : -std::numeric_limits<float>::infinity();
+            char const* reject = nullptr;
+            char const* downState = "n/a";
+            char const* upState = "n/a";
+            char const* bodyState = "n/a";
+            if (belowTerrain)
+            {
+                // The cell must sit above a real WMO floor. This is the solid-volume
+                // floor test; MMap is kept only as a diagnostic cross-check, because a
+                // multi-level WMO room can have a nearby floor far above the navmesh
+                // surface and still be valid air.
+                if (!hasWmo || !std::isfinite(wmoFloor) || wmoFloor > z + 0.5f)
+                    reject = "wmo-floor";
+                else
+                {
+                    // The shaft down to the WMO floor must be clear. Above a WMO/cave
+                    // ceiling the downward ray hits the roof, so rock between the
+                    // ceiling and the outdoor terrain is rejected.
+                    G3D::Vector3 const down = mirror(x, y, wmoFloor + 0.5f);
+                    bool const downClear =
+                        tree.isInLineOfSight(point, down, VMAP::ModelIgnoreFlags::Nothing);
+                    downState = downClear ? "clear" : "blocked";
+                    if (!downClear)
+                        reject = "down-los";
+                    else
+                    {
+                        // The cell must also be under a WMO/tunnel ceiling. Above the
+                        // tunnel roof the upward ray reaches the terrain with no WMO hit;
+                        // that is solid cliff/rock, not cave air.
+                        G3D::Vector3 const up = mirror(x, y, terrain + 1.0f);
+                        bool const upClear =
+                            std::isfinite(terrain) &&
+                            tree.isInLineOfSight(point, up, VMAP::ModelIgnoreFlags::Nothing);
+                        upState = upClear ? "clear" : "blocked";
+                        if (upClear)
+                            reject = "up-los";
+                        // Highest WMO surface below the outdoor terrain: above the tunnel
+                        // roof the column-top test rejects rock between roof and terrain.
+                        else if (std::isfinite(columnTop) && z > columnTop + 0.5f)
+                            reject = "wmo-column-top";
+                    }
+                }
+            }
+            if (!reject)
+            {
+                for (Ray const& ray : rays)
+                {
+                    G3D::Vector3 const end = point + G3D::Vector3(ray.X * ray.Distance,
+                                                                 ray.Y * ray.Distance,
+                                                                 ray.Z * ray.Distance);
+                    if (!tree.isInLineOfSight(point, end, VMAP::ModelIgnoreFlags::Nothing))
+                    {
+                        bodyState = "blocked";
+                        reject = "body";
+                        break;
+                    }
+                }
+                if (!reject)
+                    bodyState = "clear";
+            }
+            if (options.AirDetailDiag)
+            {
+                std::cout << "diag airAt (" << x << "," << y << "," << z << ")"
+                          << " terrain=" << terrain << " below=" << belowTerrain
+                          << " hasWmo=" << hasWmo << " wmoFloor=" << wmoFloor
+                          << " mmapFloor=" << floor << " down=" << downState
+                          << " up=" << upState << " columnTop=" << columnTop
+                          << " body=" << bodyState << " -> " << (reject ? reject : "air") << "\n";
+            }
+            return !reject;
+        };
+
+        auto const boxIndex = [width, height](int x, int y, int z) -> size_t
+        {
+            return (size_t(z) * size_t(height) + size_t(y)) * size_t(width) + size_t(x);
+        };
+        if (options.AirDetailDiag)
+        {
+            for (auto const& seed : options.Seeds)
+                airAt(seed[0], seed[1], seed[2]);
+            return true;
+        }
+
+        std::vector<uint8_t> air(cellCount, 0);
+        std::vector<int8_t> cache(cellCount, 0);
+
+        uint32 const jobs = std::clamp<uint32>(options.Jobs, 1, 32);
+        std::atomic<size_t> nextCell{0};
+        auto const classify = [&]()
+        {
+            while (true)
+            {
+                size_t const index = nextCell.fetch_add(1);
+                if (index >= cellCount)
+                    break;
+                int const x = int(index % size_t(width));
+                int const y = int((index / size_t(width)) % size_t(height));
+                int const z = int(index / (size_t(width) * size_t(height)));
+                bool const value = airAt(originX + (float(x) + 0.5f) * cellSize,
+                                         originY + (float(y) + 0.5f) * cellSize,
+                                         originZ + (float(z) + 0.5f) * cellSize);
+                cache[index] = value ? 1 : -1;
+            }
+        };
+        if (jobs <= 1)
+            classify();
+        else
+        {
+            std::vector<std::thread> workers;
+            workers.reserve(jobs);
+            for (uint32 i = 0; i < jobs; ++i)
+                workers.emplace_back(classify);
+            for (std::thread& worker : workers)
+                worker.join();
+        }
+
+        auto const cachedAir = [&](int x, int y, int z) -> bool
+        {
+            return cache[boxIndex(x, y, z)] > 0;
+        };
+
+        std::deque<std::array<int, 3>> queue;
+        size_t liveCells = 0;
+        for (auto const& seed : options.Seeds)
+        {
+            int const sx = std::clamp(int(std::floor((seed[0] - originX) / cellSize)), 0, width - 1);
+            int const sy = std::clamp(int(std::floor((seed[1] - originY) / cellSize)), 0, height - 1);
+            int const sz = std::clamp(int(std::floor((seed[2] - originZ) / cellSize)), 0, sizeZ - 1);
+            bool found = false;
+            for (int radius = 0; radius <= 2 && !found; ++radius)
+            {
+                for (int dx = -radius; dx <= radius && !found; ++dx)
+                {
+                    for (int dy = -radius; dy <= radius && !found; ++dy)
+                    {
+                        for (int dz = -radius; dz <= radius && !found; ++dz)
+                        {
+                            int const x = sx + dx;
+                            int const y = sy + dy;
+                            int const z = sz + dz;
+                            if (x < 0 || x >= width || y < 0 || y >= height || z < 0 || z >= sizeZ)
+                                continue;
+                            if (!cachedAir(x, y, z))
+                                continue;
+                            size_t const index = boxIndex(x, y, z);
+                            if (air[index])
+                                continue;
+                            air[index] = 1;
+                            ++liveCells;
+                            queue.push_back({x, y, z});
+                            found = true;
+                        }
+                    }
+                }
+            }
+            if (!found)
+                std::cerr << "seed has no air: " << seed[0] << "," << seed[1] << "," << seed[2] << "\n";
+        }
+        if (queue.empty())
+        {
+            std::cerr << "no air seeds found\n";
+            return false;
+        }
+
+        static constexpr int neighbors[6][3] = {
+            {1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+        while (!queue.empty())
+        {
+            auto const current = queue.front();
+            queue.pop_front();
+            G3D::Vector3 const from = mirror(originX + (float(current[0]) + 0.5f) * cellSize,
+                                             originY + (float(current[1]) + 0.5f) * cellSize,
+                                             originZ + (float(current[2]) + 0.5f) * cellSize);
+            for (auto const& offset : neighbors)
+            {
+                int const x = current[0] + offset[0];
+                int const y = current[1] + offset[1];
+                int const z = current[2] + offset[2];
+                if (x < 0 || x >= width || y < 0 || y >= height || z < 0 || z >= sizeZ)
+                    continue;
+                size_t const index = boxIndex(x, y, z);
+                if (air[index] || !cachedAir(x, y, z))
+                    continue;
+                G3D::Vector3 const to = mirror(originX + (float(x) + 0.5f) * cellSize,
+                                               originY + (float(y) + 0.5f) * cellSize,
+                                               originZ + (float(z) + 0.5f) * cellSize);
+                if (!tree.isInLineOfSight(from, to, VMAP::ModelIgnoreFlags::Nothing))
+                    continue;
+                air[index] = 1;
+                ++liveCells;
+                queue.push_back({x, y, z});
+            }
+        }
+
+        Nav3DTile tile;
+        Nav3DTileHeader& header = tile.Header();
+        header.MapId = options.MapId;
+        header.TileX = uint16(tileX);
+        header.TileY = uint16(tileY);
+        header.Medium = Nav3D::MediumAirDetail;
+        header.CellSize = cellSize;
+        header.OriginX = originX;
+        header.OriginY = originY;
+        header.OriginZ = originZ;
+        header.ExtentX = float(width) * cellSize;
+        header.ExtentY = float(height) * cellSize;
+        header.ExtentZ = float(sizeZ) * cellSize;
+        header.SizeX = uint32(width);
+        header.SizeY = uint32(height);
+        header.SizeZ = uint32(sizeZ);
+        // The detail tile is authoritative for its box: the bake already encodes the
+        // static solid volume, and a live-map re-check would make the result depend on
+        // which vmap grids happen to be loaded around the player. Clearing FlagLiveLos
+        // keeps runtime A* on the baked volume only.
+        header.Flags |= Nav3D::FlagHasSolid;
+        header.GeneratorVersion = 6;
+        header.GeometryHash = 0;
+
+        tile.Columns().resize(size_t(width) * size_t(height));
+        size_t liveColumns = 0;
+        for (int y = 0; y < height; ++y)
+        {
+            for (int x = 0; x < width; ++x)
+            {
+                Nav3DTileColumn& column = tile.Columns()[size_t(y) * size_t(width) + size_t(x)];
+                bool any = false;
+                for (int z = 0; z < sizeZ;)
+                {
+                    if (!air[boxIndex(x, y, z)])
+                    {
+                        ++z;
+                        continue;
+                    }
+                    int const start = z;
+                    while (z < sizeZ && air[boxIndex(x, y, z)])
+                        ++z;
+                    column.IntervalOffset = column.IntervalCount == 0
+                                                ? uint32(tile.Intervals().size())
+                                                : column.IntervalOffset;
+                    Nav3DTileInterval interval;
+                    interval.ZMin = int16(start);
+                    interval.ZMax = int16(z - 1);
+                    interval.Clearance = 16;
+                    interval.Flags = 0;
+                    tile.Intervals().push_back(interval);
+                    column.IntervalCount = uint16(column.IntervalCount + 1);
+                    any = true;
+                }
+                if (any)
+                    ++liveColumns;
+            }
+        }
+
+        std::string const relative = Acore::StringFormat("map{:04}/{:02}_{:02}_airdetail.n3t",
+                                                         options.MapId, tileX, tileY);
+        std::filesystem::path const outputFile =
+            std::filesystem::path(options.OutputDir) / relative;
+        std::error_code ec;
+        std::filesystem::create_directories(outputFile.parent_path(), ec);
+        if (ec)
+        {
+            std::cerr << "cannot create " << outputFile.parent_path() << ": " << ec.message() << "\n";
+            return false;
+        }
+        if (!tile.Save(outputFile.string()))
+        {
+            std::cerr << "failed to write " << outputFile << "\n";
+            return false;
+        }
+
+        std::cout << "wrote " << outputFile << " (airdetail " << liveColumns << " columns, "
+                  << liveCells << " cells, " << tile.Intervals().size() << " intervals, "
+                  << width << "x" << height << "x" << sizeZ << ")\n";
+        return true;
+    }
+
+    bool ProbeMap(Options const& options)
+    {
+        std::string basePath = options.DataDir;
+        if (!basePath.empty() && basePath.back() != '/')
+            basePath += '/';
+        basePath += "vmaps/";
+        std::string const mapFileName = VMAP::VMapMgr2::getMapFileName(options.MapId);
+
+        std::cout << "probe map " << options.MapId << " point=(" << options.ProbeX << ","
+                  << options.ProbeY << "," << options.ProbeZ << ") base=" << basePath << "\n";
+
+        std::pair<uint32, uint32> const orders[] = {{18, 32}, {32, 18}, {18, 33}, {33, 18}};
+        for (auto const& order : orders)
+        {
+            VMAP::StaticMapTree tree(options.MapId, basePath);
+            if (!tree.InitMap(mapFileName))
+            {
+                std::cout << "tile " << order.first << ":" << order.second << " InitMap failed\n";
+                continue;
+            }
+            tree.LoadMapTile(order.first, order.second);
+            VMAP::ModelInstance* models = nullptr;
+            uint32_t count = 0;
+            tree.GetModelInstances(models, count);
+            std::cout << "tile " << order.first << ":" << order.second << " models=" << count << "\n";
+            for (uint32_t i = 0; i < count; ++i)
+            {
+                std::string lower = models[i].name;
+                std::transform(lower.begin(), lower.end(), lower.begin(),
+                               [](unsigned char c) { return char(std::tolower(c)); });
+                if (lower.find("titan") == std::string::npos && lower.find("machine") == std::string::npos)
+                    continue;
+                std::cout << "  " << models[i].name << " pos=(" << models[i].iPos.x << ","
+                          << models[i].iPos.y << "," << models[i].iPos.z << ") scale="
+                          << models[i].iScale << " bound=(" << models[i].iBound.low().x << ","
+                          << models[i].iBound.low().y << "," << models[i].iBound.low().z << ")-("
+                          << models[i].iBound.high().x << "," << models[i].iBound.high().y << ","
+                          << models[i].iBound.high().z << ")\n";
+            }
+
+            struct Candidate
+            {
+                char const* Name;
+                G3D::Vector3 Point;
+            };
+            std::array<Candidate, 5> const points = {{
+                {"server", G3D::Vector3(options.ProbeX, options.ProbeY, options.ProbeZ)},
+                {"minus-17066", G3D::Vector3(options.ProbeX - 17066.0f,
+                                            options.ProbeY - 17066.0f, options.ProbeZ)},
+                {"mirror-17066", G3D::Vector3(17066.0f - options.ProbeX,
+                                             17066.0f - options.ProbeY, options.ProbeZ)},
+                {"swap", G3D::Vector3(options.ProbeY, options.ProbeX, options.ProbeZ)},
+                {"swap-mirror", G3D::Vector3(17066.0f - options.ProbeY,
+                                             17066.0f - options.ProbeX, options.ProbeZ)},
+            }};
+            for (Candidate const& candidate : points)
+            {
+                float const height = tree.getHeight(candidate.Point, 5000.0f);
+                VMAP::LocationInfo info;
+                bool const found = tree.GetLocationInfo(candidate.Point, info);
+                std::cout << "  height " << candidate.Name << "=(" << candidate.Point.x << ","
+                          << candidate.Point.y << "," << candidate.Point.z << ") -> " << height
+                          << " loc=" << (found ? 1 : 0) << " ground=" << info.ground_Z
+                          << " root=" << info.rootId << "\n";
+            }
+        }
+        return true;
+    }
+
 }
 
 int main(int argc, char** argv)
@@ -1651,6 +2286,11 @@ int main(int argc, char** argv)
         PrintUsage(argv[0]);
         return 1;
     }
+
+    if (options.Probe)
+        return ProbeMap(options) ? 0 : 1;
+    if (options.AirTreeDetail)
+        return GenerateAirTreeDetailTile(options) ? 0 : 1;
 
     if (options.CellSize <= 0.0f)
     {
