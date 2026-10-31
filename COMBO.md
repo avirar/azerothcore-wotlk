@@ -145,9 +145,15 @@ entirely.
   any `.playerbots travel generatenode` run; old ids may point at different
   nodes.
 - `MaxCoreStuckTime` must be raised while running `.playerbots travel
-  generatenode`; the command blocks the world thread for several minutes.
+  generatenode`; the command blocks the world thread for several minutes. Use
+  7200 (2 h) for a from-scratch graph.
 - GO teleport links now accept both `GAMEOBJECT_TYPE_SPELLCASTER` and
-  `GAMEOBJECT_TYPE_GOOBER` (Orb of Translocation 184500/184501, Naxx orbs).
+  `GAMEOBJECT_TYPE_GOOBER`. This links Naxxramas portals/orbs, the Violet Stand
+  crystal and the Exit Portal. Orb of Translocation 184500/184501 uses
+  `SPELL_EFFECT_SCRIPT_EFFECT`, not `TELEPORT_UNITS`, so it has no spell-based
+  target and is not linked by the generator.
+- `.playerbots travel portalscan` prints the GO type/template counts and the
+  spell/teleport resolution for every goober with a spell.
 - Moving WMOs (gunships, transports) and Skybreaker/Orgrim's Hammer routing are
   not covered by the nav3d tiles.
 - Dalaran/Wintergrasp restricted flight uses a timed one-way blocker with a
