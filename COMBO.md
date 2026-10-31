@@ -52,8 +52,9 @@ on the worldserver.
 ### 3. travel-node graph
 
 The schema ships in `data/sql/playerbots/base/playerbots_travelnode*.sql`.
-The graph rows are generated, not committed (the upstream branch carries ~2.8M
-rows of generated SQL). Generate them once on a GM console:
+Note that the stock base file already carries a full 2024 walk/taxi dataset
+(~1.5M path points, 67 MB). The 2.8M-row travel-branch regeneration is not
+committed. Regenerate the graph once on a GM console:
 
 ```
 .playerbots travel generatenode
@@ -64,7 +65,33 @@ The command blocks the world thread until finished and saves to the
 tables. The generator refuses to run when
 `Playerbots.EnableTravelNodes = 0`.
 
-### 4. quest POI Z
+### 4. 3D travel paths (swim / free flight)
+
+`playerbots_travelnode_link3d` and `playerbots_travelnode_path3d` are optional
+pre-baked 3D routes. Build the standalone baker (no worldserver needed):
+
+```sh
+cmake -S . -B build -DTOOLS_BUILD=all
+cmake --build build --target nav3d_travel_baker
+```
+
+Export nodes and bake:
+
+```sh
+mysql -N -e "SELECT id,map_id,x,y,z FROM playerbots_travelnode" acore_playerbots > nodes.txt
+nav3d_travel_baker --nodes nodes.txt --tiles env/dist/bin/nav3d \
+  --out bake_3d --medium both --threads 8 --radius 2000
+```
+
+It writes `travelnode_water.sql`, `travelnode_air.sql` and
+`travelnode_bake.sql`. Import them into `acore_playerbots`. The baker uses only
+the `.n3t` tiles (no Map, no live LOS), so run it offline and review the output
+before importing. `--max-pairs N` is useful for a smoke test.
+
+The runtime selects a 3D link only when the bot can use it: free flight while
+flying, swim while swimming/underwater. Otherwise the 2D walk link is used.
+
+### 5. quest POI Z
 
 `QuestPoiZStore` reads `playerbots_quest_poi_z` from the playerbots database.
 Bake it with `acore-data/scripts/quest_poi_z_baker.py`. When the table is
@@ -112,6 +139,12 @@ entirely.
   first `.playerbots travel generatenode` run is required for graph routing.
 - Travel A* has a fixed 2000-node budget; some long or badly connected routes
   log `[TravelFail] A* search budget exhausted` and fall back.
+- 3D travel paths are generated data. The baker is tile-only; it does not
+  validate against live VMAP LOS. Keep `--max-pairs`/small runs for review.
+- `MaxCoreStuckTime` must be raised while running `.playerbots travel
+  generatenode`; the command blocks the world thread for several minutes.
+- GO teleport links now accept both `GAMEOBJECT_TYPE_SPELLCASTER` and
+  `GAMEOBJECT_TYPE_GOOBER` (Orb of Translocation 184500/184501, Naxx orbs).
 - Moving WMOs (gunships, transports) and Skybreaker/Orgrim's Hammer routing are
   not covered by the nav3d tiles.
 - Dalaran/Wintergrasp restricted flight uses a timed one-way blocker with a
