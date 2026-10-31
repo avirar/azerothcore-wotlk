@@ -91,6 +91,16 @@ before importing. `--max-pairs N` is useful for a smoke test.
 The runtime selects a 3D link only when the bot can use it: free flight while
 flying, swim while swimming/underwater. Otherwise the 2D walk link is used.
 
+A full 2026-10-31 bake produced:
+
+- air: 146,369 links (maps 530/571), 4,304,229 path points
+- swim: 886 links (maps 0/1/48/530/571), 36,595 path points
+- total: 147,255 links, 4,340,824 points, 189 MB SQL
+
+Shards are backed up on the NAS at
+`/root/nas/nav3d_travel_bake_20261031/`. Import them into `acore_playerbots`
+and restart; the log should report the loaded 3D link/point counts.
+
 ### 5. quest POI Z
 
 `QuestPoiZStore` reads `playerbots_quest_poi_z` from the playerbots database.
