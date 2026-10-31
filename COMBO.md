@@ -141,6 +141,9 @@ entirely.
   log `[TravelFail] A* search budget exhausted` and fall back.
 - 3D travel paths are generated data. The baker is tile-only; it does not
   validate against live VMAP LOS. Keep `--max-pairs`/small runs for review.
+- Travel node ids are assigned by the node store. Rebake the 3D links after
+  any `.playerbots travel generatenode` run; old ids may point at different
+  nodes.
 - `MaxCoreStuckTime` must be raised while running `.playerbots travel
   generatenode`; the command blocks the world thread for several minutes.
 - GO teleport links now accept both `GAMEOBJECT_TYPE_SPELLCASTER` and

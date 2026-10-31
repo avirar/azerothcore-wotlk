@@ -549,7 +549,6 @@ namespace
             }
         }
 
-        size_t row = 0;
         for (size_t offset = 0; offset < results.size(); offset += kBatch)
         {
             size_t const end = std::min(offset + kBatch, results.size());
@@ -559,7 +558,7 @@ namespace
             for (size_t i = offset; i < end; ++i)
             {
                 Result const& r = results[i];
-                for (size_t n = 0; n < r.points.size(); ++n, ++row)
+                for (size_t n = 0; n < r.points.size(); ++n)
                 {
                     if (!first)
                         out << ",\n";
